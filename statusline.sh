@@ -335,6 +335,7 @@ sep="  "
 branch=""
 diff_stat=""
 worktree_name=""          # worktree folder name, only when it differs from the branch
+branch_display=""         # branch as rendered beside the worktree name (may be truncated)
 branch_glyph="⌥"          # main checkout
 branch_color="\033[36m"   # cyan
 if [ -n "$cwd" ]; then
@@ -376,10 +377,12 @@ if [ -n "$cwd" ]; then
         worktree_name=""
       fi
       # Genuinely different names render as a pair; middle-truncate the
-      # trailing branch so the pair can't blow out the line.
-      branch_display=$branch
-      if [ -n "$worktree_name" ] && [ ${#branch} -gt 15 ]; then
-        branch_display=$(printf '%s' "$branch" | awk '{printf "%s…%s", substr($0, 1, 7), substr($0, length($0) - 6)}')
+      # trailing branch so the pair can't blow out the line. 9 chars kept per
+      # side so a full ticket id (PRO-14555) survives the cut. In UTF-8
+      # locales sed counts characters, not bytes, so multibyte names truncate
+      # cleanly; names of 19 chars or fewer don't match and pass through.
+      if [ -n "$worktree_name" ]; then
+        branch_display=$(printf '%s' "$branch" | sed -E 's/^(.{9}).{2,}(.{9})$/\1…\2/')
       fi
     fi
     added=0
@@ -502,7 +505,7 @@ fi
 if [ -n "$branch" ]; then
   # Worktree name (always mauve here) leads when present; branch trails dimmed
   printf "${branch_color}${branch_glyph} %s${reset}" "${worktree_name:-$branch}"
-  [ -n "$worktree_name" ] && printf " ${dim}%s${reset}" "$branch_display"
+  [ -n "$worktree_name" ] && printf " ${dim}%s${reset}" "${branch_display:-$branch}"
   printf "%b" "$diff_stat"
   printf "%s" "$sep"
 fi

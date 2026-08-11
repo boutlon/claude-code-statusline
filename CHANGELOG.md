@@ -9,7 +9,7 @@
 ### Changed
 
 - Treat cosmetic worktree-folder differences as a match: a folder that is just the branch with slashes flattened (`fix-tpm` for `fix/tpm`) and/or a 1-2 digit collision suffix (`fix-tpm-2`) no longer renders both names
-- Middle-truncate the dimmed branch name to 15 characters when it renders alongside a genuinely different worktree name, keeping the line bounded
+- Middle-truncate the dimmed branch name to 19 characters (9 kept per side, so a full ticket id like PRO-14555 survives) when it renders alongside a genuinely different worktree name, keeping the line bounded
 
 ## 1.6.0
 

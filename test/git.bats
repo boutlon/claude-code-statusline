@@ -135,19 +135,48 @@ load 'helpers'
   [[ "$(plain)" == *"⧉ release-2024 release"* ]]
 }
 
+@test "git: digit-ending branch matching its folder exactly is not shown twice" {
+  make_git_repo
+  make_worktree fix-2 -b fix-2
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ fix-2"* ]]
+  [[ "$(plain)" != *"fix-2 fix-2"* ]]
+}
+
 @test "git: long branch is middle-truncated when shown alongside the worktree name" {
   make_git_repo
   make_worktree wt-alpha -b feature/very-long-branch-name
   run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
-  [[ "$(plain)" == *"⧉ wt-alpha feature…ch-name"* ]]
+  [[ "$(plain)" == *"⧉ wt-alpha feature/v…anch-name"* ]]
   [[ "$(plain)" != *"very-long-branch-name"* ]]
 }
 
-@test "git: 15-char branch renders in full alongside the worktree name" {
+@test "git: truncation keeps a leading ticket id intact" {
   make_git_repo
-  make_worktree wt-alpha -b abcdefghijklmno
+  make_worktree wt-alpha -b PRO-14555-add-login-flow
   run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
-  [[ "$(plain)" == *"⧉ wt-alpha abcdefghijklmno"* ]]
+  [[ "$(plain)" == *"⧉ wt-alpha PRO-14555…ogin-flow"* ]]
+}
+
+@test "git: multibyte branch truncates on character boundaries, not bytes" {
+  make_git_repo
+  make_worktree wt-alpha -b naïve-feature-branch-name
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ wt-alpha naïve-fea…anch-name"* ]]
+}
+
+@test "git: 19-char branch renders in full alongside the worktree name" {
+  make_git_repo
+  make_worktree wt-alpha -b abcdefghijklmnopqrs
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ wt-alpha abcdefghijklmnopqrs"* ]]
+}
+
+@test "git: 20-char branch is the shortest that truncates" {
+  make_git_repo
+  make_worktree wt-alpha -b abcdefghijklmnopqrst
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ wt-alpha abcdefghi…lmnopqrst"* ]]
 }
 
 @test "git: worktree name reflects the folder after git worktree move" {
