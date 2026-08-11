@@ -26,6 +26,22 @@ cleanup_state() {
   rm -f "/tmp/claude-code-statusline-usage-${sid}"
 }
 
+# Create a git repo with one commit at $TEST_GIT_REPO ($1 = branch, default main)
+make_git_repo() {
+  TEST_GIT_REPO=$(mktemp -d)
+  git -C "$TEST_GIT_REPO" init -b "${1:-main}" >/dev/null 2>&1
+  git -C "$TEST_GIT_REPO" -c user.name=test -c user.email=test@test commit --allow-empty -m "init" >/dev/null 2>&1
+}
+
+# Add a linked worktree, publishing its path as $TEST_WORKTREE
+# ($TEST_GIT_REPO/.worktrees/$1); remaining args pass through to
+# `git worktree add` (e.g. -b branch, --detach)
+make_worktree() {
+  local folder="$1"; shift
+  TEST_WORKTREE="$TEST_GIT_REPO/.worktrees/$folder"
+  git -C "$TEST_GIT_REPO" worktree add "$@" "$TEST_WORKTREE" >/dev/null 2>&1
+}
+
 # Build JSON input using jq for proper escaping
 # Args: model used session_id duration_ms total_in total_out cwd transcript_path
 #       [rl_5h_pct rl_5h_reset rl_7d_pct rl_7d_reset]

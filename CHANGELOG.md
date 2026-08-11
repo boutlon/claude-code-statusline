@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Show the worktree's folder name in the branch segment when it differs from the branch name (name in mauve, branch dimmed alongside)
+
 ## 1.6.0
 
 ### Added

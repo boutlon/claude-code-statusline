@@ -334,6 +334,7 @@ sep="  "
 # Git branch + uncommitted diff stats (tracked + untracked)
 branch=""
 diff_stat=""
+worktree_name=""          # worktree folder name, only when it differs from the branch
 branch_glyph="⌥"          # main checkout
 branch_color="\033[36m"   # cyan
 if [ -n "$cwd" ]; then
@@ -351,12 +352,20 @@ if [ -n "$cwd" ]; then
     # (absolute) form; without it, from a subdir of the main checkout git prints
     # git-dir absolute but common-dir relative, so the string compare below would
     # false-positive a plain main checkout as a worktree.
-    gitdirs=$(git --no-optional-locks -C "$cwd" rev-parse --path-format=absolute --git-dir --git-common-dir 2>/dev/null)
-    gd=$(printf '%s\n' "$gitdirs" | sed -n '1p')
-    gcd=$(printf '%s\n' "$gitdirs" | sed -n '2p')
+    gitpaths=$(git --no-optional-locks -C "$cwd" rev-parse --path-format=absolute --git-dir --git-common-dir --show-toplevel 2>/dev/null)
+    gd=$(printf '%s\n' "$gitpaths" | sed -n '1p')
+    gcd=$(printf '%s\n' "$gitpaths" | sed -n '2p')
     if [ -n "$gd" ] && [ "$gd" != "$gcd" ]; then
       branch_glyph="⧉"                # worktree = a parallel copy of the repo
       branch_color="\033[38;5;182m"   # light mauve, distinct from the cyan main checkout
+      # Worktree name = folder name of the worktree root (third rev-parse
+      # output, --show-toplevel). Not the git-dir basename: that goes stale
+      # after `git worktree move` and gains numeric suffixes on basename
+      # collisions. Suppressed when it matches the branch (the common case)
+      # so we don't render "feature feature".
+      worktree_name=$(printf '%s\n' "$gitpaths" | sed -n '3p')
+      worktree_name=${worktree_name##*/}
+      [ "$worktree_name" = "$branch" ] && worktree_name=""
     fi
     added=0
     removed=0
@@ -476,7 +485,9 @@ fi
 # ─── Line 1: branch, diff, model, context, tpm ───
 
 if [ -n "$branch" ]; then
-  printf "${branch_color}${branch_glyph} %s${reset}" "$branch"
+  # Worktree name (always mauve here) leads when present; branch trails dimmed
+  printf "${branch_color}${branch_glyph} %s${reset}" "${worktree_name:-$branch}"
+  [ -n "$worktree_name" ] && printf " ${dim}%s${reset}" "$branch"
   printf "%b" "$diff_stat"
   printf "%s" "$sep"
 fi
