@@ -365,7 +365,22 @@ if [ -n "$cwd" ]; then
       # so we don't render "feature feature".
       worktree_name=$(printf '%s\n' "$gitpaths" | sed -n '3p')
       worktree_name=${worktree_name##*/}
-      [ "$worktree_name" = "$branch" ] && worktree_name=""
+      # Cosmetic differences also collapse to one name: folders are commonly
+      # the branch with slashes flattened to dashes (fix/tpm -> fix-tpm),
+      # optionally plus a numeric collision suffix (fix-tpm-2). Suffix is
+      # capped at two digits so a meaningful name like release-2024 still
+      # counts as a real divergence.
+      norm_branch=$(printf '%s' "$branch" | tr '/' '-')
+      norm_wt=$(printf '%s' "$worktree_name" | sed -E 's/-[0-9]{1,2}$//')
+      if [ "$worktree_name" = "$norm_branch" ] || [ "$norm_wt" = "$norm_branch" ]; then
+        worktree_name=""
+      fi
+      # Genuinely different names render as a pair; middle-truncate the
+      # trailing branch so the pair can't blow out the line.
+      branch_display=$branch
+      if [ -n "$worktree_name" ] && [ ${#branch} -gt 15 ]; then
+        branch_display=$(printf '%s' "$branch" | awk '{printf "%s…%s", substr($0, 1, 7), substr($0, length($0) - 6)}')
+      fi
     fi
     added=0
     removed=0
@@ -487,7 +502,7 @@ fi
 if [ -n "$branch" ]; then
   # Worktree name (always mauve here) leads when present; branch trails dimmed
   printf "${branch_color}${branch_glyph} %s${reset}" "${worktree_name:-$branch}"
-  [ -n "$worktree_name" ] && printf " ${dim}%s${reset}" "$branch"
+  [ -n "$worktree_name" ] && printf " ${dim}%s${reset}" "$branch_display"
   printf "%b" "$diff_stat"
   printf "%s" "$sep"
 fi

@@ -100,8 +100,54 @@ load 'helpers'
   make_git_repo
   make_worktree foo -b feature/foo
   run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
-  # Folder "foo" != branch "feature/foo": full branch string is compared, so both render
+  # Folder "foo" != branch "feature/foo" even after flattening slashes, so both render
   [[ "$(plain)" == *"⧉ foo feature/foo"* ]]
+}
+
+@test "git: folder matching the branch with slashes flattened is not a divergence" {
+  make_git_repo
+  make_worktree feature-foo -b feature/foo
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ feature/foo"* ]]
+  [[ "$(plain)" != *"feature-foo"* ]]
+}
+
+@test "git: numeric collision suffix on the folder is not a divergence" {
+  make_git_repo
+  make_worktree feature-2 -b feature
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ feature"* ]]
+  [[ "$(plain)" != *"feature-2"* ]]
+}
+
+@test "git: collision suffix plus flattened slashes still collapses to the branch" {
+  make_git_repo
+  make_worktree fix-tpm-2 -b fix/tpm
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ fix/tpm"* ]]
+  [[ "$(plain)" != *"fix-tpm-2"* ]]
+}
+
+@test "git: a long numeric suffix is a real name, not a collision suffix" {
+  make_git_repo
+  make_worktree release-2024 -b release
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ release-2024 release"* ]]
+}
+
+@test "git: long branch is middle-truncated when shown alongside the worktree name" {
+  make_git_repo
+  make_worktree wt-alpha -b feature/very-long-branch-name
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ wt-alpha feature…ch-name"* ]]
+  [[ "$(plain)" != *"very-long-branch-name"* ]]
+}
+
+@test "git: 15-char branch renders in full alongside the worktree name" {
+  make_git_repo
+  make_worktree wt-alpha -b abcdefghijklmno
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ wt-alpha abcdefghijklmno"* ]]
 }
 
 @test "git: worktree name reflects the folder after git worktree move" {

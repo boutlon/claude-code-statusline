@@ -6,6 +6,11 @@
 
 - Show the worktree's folder name in the branch segment when it differs from the branch name (name in mauve, branch dimmed alongside)
 
+### Changed
+
+- Treat cosmetic worktree-folder differences as a match: a folder that is just the branch with slashes flattened (`fix-tpm` for `fix/tpm`) and/or a 1-2 digit collision suffix (`fix-tpm-2`) no longer renders both names
+- Middle-truncate the dimmed branch name to 15 characters when it renders alongside a genuinely different worktree name, keeping the line bounded
+
 ## 1.6.0
 
 ### Added
