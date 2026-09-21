@@ -1,6 +1,6 @@
 #!/bin/sh
 # Line 1: ⌥ branch  +N -N  ✦ model  ██▒░░ N%  ϟ N tpm
-# Line 2: 5h N% XhYm  7d N% XdYh   (shown when on pace / ≥75%)
+# Line 2: 5h N% XhYm  7d N% XdYh  cache Nm   (rate limits shown when on pace / ≥75%; cache when ≤10m left or cold)
 
 TPM_STATE_PREFIX="claude-code-statusline-tpm"
 TPM_WINDOW_MS=300000  # 5 minutes
@@ -8,6 +8,7 @@ MODEL_STATE_PREFIX="claude-code-statusline-model"
 SUBAGENT_STATE_PREFIX="claude-code-statusline-subagent"
 USAGE_STATE_PREFIX="claude-code-statusline-usage"
 USAGE_FIRST_WINDOW_S=5   # seconds to show rate limits on first invocation
+CACHE_SHOW_S=600         # show the prompt cache countdown at or below this many seconds left
 
 # Helpers for rate limit display
 fmt_countdown() {
@@ -89,7 +90,9 @@ eval "$(echo "$input" | jq -r '
   "rl_5h_pct=\(.rate_limits.five_hour.used_percentage // "" | @sh)",
   "rl_5h_reset=\(.rate_limits.five_hour.resets_at // "" | @sh)",
   "rl_7d_pct=\(.rate_limits.seven_day.used_percentage // "" | @sh)",
-  "rl_7d_reset=\(.rate_limits.seven_day.resets_at // "" | @sh)"
+  "rl_7d_reset=\(.rate_limits.seven_day.resets_at // "" | @sh)",
+  "cache_warm=\(.prompt_cache.warm // "" | @sh)",
+  "cache_expires=\(.prompt_cache.expires_at | if type == "number" then floor else 0 end | @sh)"
 ')"
 
 # Defaults if jq fails or fields are missing
@@ -98,12 +101,15 @@ used=${used:-0}; model=${model:-unknown}; ctx_size=${ctx_size:-0}
 total_in=${total_in:-0}; total_out=${total_out:-0}; duration_ms=${duration_ms:-0}
 rl_5h_pct=${rl_5h_pct:-}; rl_5h_reset=${rl_5h_reset:-}
 rl_7d_pct=${rl_7d_pct:-}; rl_7d_reset=${rl_7d_reset:-}
+cache_warm=${cache_warm:-}; cache_expires=${cache_expires:-}
 
 # Validate numeric fields
 case "$rl_5h_reset" in ""|*[!0-9]*) rl_5h_reset="" ;; esac
 case "$rl_7d_reset" in ""|*[!0-9]*) rl_7d_reset="" ;; esac
 case "$rl_5h_pct" in ""|*[!0-9.]*|*.*.*) rl_5h_pct="" ;; esac
 case "$rl_7d_pct" in ""|*[!0-9.]*|*.*.*) rl_7d_pct="" ;; esac
+# expires_at is null (jq → 0) when the last response reported no cache tokens
+case "$cache_expires" in ""|0|*[!0-9]*) cache_expires="" ;; esac
 
 # Validate model name: must match "Name N" or "Name N.N" (e.g. "Fable 5", "Opus 4.6", "Haiku 4.5")
 # Garbled names from Claude Code (e.g. "Op.6") are treated as unknown so they don't pollute the cache
@@ -490,6 +496,33 @@ if ! hidden limits && { [ -n "$rl_5h_pct" ] || [ -n "$rl_7d_pct" ]; }; then
   fi
 fi
 
+# Prompt cache state. Warmth is computed from expires_at against the clock
+# rather than trusting `warm`: Claude Code re-runs the script the moment a warm
+# cache reaches expires_at, but the payload it hands over may still say warm.
+# Hidden while comfortably warm (> CACHE_SHOW_S left) or when there is no data.
+cache_seg=""
+if [ -n "$cache_expires" ]; then
+  _now=${_now:-$(date +%s)}
+  cache_left=$((cache_expires - _now))
+  if [ "$cache_warm" != "true" ] || [ "$cache_left" -le 0 ]; then
+    cache_seg="\033[38;5;63mcache cold"          # blue
+  elif [ "$cache_left" -le "$CACHE_SHOW_S" ]; then
+    if [ "$cache_left" -lt 120 ]; then
+      cache_color="\033[91m"                       # red: under 2m
+    elif [ "$cache_left" -lt 300 ]; then
+      cache_color="\033[38;5;208m"                 # orange: under 5m
+    else
+      cache_color="\033[93m"                       # yellow: 5m to 10m
+    fi
+    if [ "$cache_left" -lt 60 ]; then
+      cache_countdown="<1m"    # a refresh tick can't support second precision
+    else
+      cache_countdown=$(fmt_countdown "$cache_left")
+    fi
+    cache_seg="${cache_color}cache ${cache_countdown}"
+  fi
+fi
+
 # ─── Line 1: branch, diff, model, context, tpm ───
 
 # emit FORMAT [ARG...]: print one segment, separated from the previous one
@@ -542,9 +575,9 @@ if [ "$tpm" -gt 0 ]; then
   emit "${dim}${bolt} %s tpm${reset}" "$tpm_display"
 fi
 
-# ─── Line 2: rate limit usage ───
+# ─── Line 2: rate limit usage, prompt cache ───
 
-if [ "$show_5h" -eq 1 ] || [ "$show_7d" -eq 1 ]; then
+if [ "$show_5h" -eq 1 ] || [ "$show_7d" -eq 1 ] || [ -n "$cache_seg" ]; then
   [ "$line1_empty" -eq 0 ] && printf '\n'
 
   if [ "$show_5h" -eq 1 ]; then
@@ -560,6 +593,11 @@ if [ "$show_5h" -eq 1 ] || [ "$show_7d" -eq 1 ]; then
     rl_7d_vcolor=$(usage_value_color "$rl_7d_pct_int")
     countdown_7d=$(fmt_countdown "$remaining_7d")
     printf "${rl_7d_color}7d ${rl_7d_vcolor}%s%%${reset} \033[2;38;5;249m%s${reset}" "$rl_7d_pct_int" "$countdown_7d"
+  fi
+
+  if [ -n "$cache_seg" ]; then
+    { [ "$show_5h" -eq 1 ] || [ "$show_7d" -eq 1 ]; } && printf "$sep"
+    printf "%b${reset}" "$cache_seg"
   fi
 fi
 
