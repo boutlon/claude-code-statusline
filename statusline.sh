@@ -179,9 +179,10 @@ if ! hidden tpm && [ -n "$transcript_path" ] && [ "$duration_ms" -gt 0 ] 2>/dev/
   window_files=$(find "$transcript_path" "${transcript_path%.jsonl}/subagents" \
     -maxdepth 1 -name '*.jsonl' -mmin "-$((TPM_WINDOW_MS / 60000 + 1))" 2>/dev/null)
   cutoff_s=$(( $(date +%s) - lookback_ms / 1000 ))
-  # BSD date takes -r <epoch>, GNU date takes -d @<epoch>
-  cutoff=$(date -u -r "$cutoff_s" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
-    || date -u -d "@$cutoff_s" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+  # BSD date takes -r <epoch>, GNU date takes -d @<epoch>. The .000Z suffix
+  # keeps a fractional timestamp in the cutoff second from sorting below it.
+  cutoff=$(date -u -r "$cutoff_s" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null \
+    || date -u -d "@$cutoff_s" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null)
   # An empty cutoff would admit the whole tail, so require one
   if [ -n "$window_files" ] && [ -n "$cutoff" ]; then
     window_tokens=$(printf '%s\n' "$window_files" | while IFS= read -r f; do
