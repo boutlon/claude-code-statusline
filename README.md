@@ -17,15 +17,15 @@ A minimal Claude Code statusline showing branch, diff, model, context, throughpu
 
 ## What it shows
 
-| Indicator | Description | Colors |
+| Indicator | Description | Thresholds |
 |---|---|---|
 | **Branch** | Current git branch |  |
 | **Diff** | Uncommitted additions and deletions |  |
 | **Model** | Active Claude model |  |
 | **Context** | Usage bar and percentage, scaled so 100% matches the actual autocompact point | Grey <35%, yellow-green 35%, yellow 50%, orange 75%, red 90% |
 | **Throughput** | Tokens per minute | Grey <1k, yellow 1k, orange 5k, red 10k, violet 20k |
-| **Rate limits** | 5-hour and 7-day usage with countdown. Shown on first use, when on pace to hit the limit, and at or above 75%. Hidden means comfortable pace | Grey <50%, yellow 50%, orange 75%, red 90% |
-| **Prompt cache** | Countdown to the cached prefix going cold, then `cache cold` until the next response warms it. Shown only in the last 10 minutes or once cold. Hidden means warm with time to spare | Yellow 10m, orange 5m, red 2m, blue when cold |
+| **Rate limits** | 5-hour and 7-day usage with a countdown to reset. Hidden while on a comfortable pace | Shown on first use, when on pace to hit the limit, and from 75%. Grey <50%, yellow 50%, orange 75%, red 90% |
+| **Prompt cache** | Countdown to the cached prefix going cold, then `cache cold` until the next response warms it. Hidden while warm with time to spare | Shown in the last 10 minutes and once cold. Yellow 10m, orange 5m, red 2m, blue when cold |
 
 Indicators without data are hidden rather than shown empty.
 
