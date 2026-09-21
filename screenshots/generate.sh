@@ -113,10 +113,12 @@ render() {
   # Throughput: the session is 60s old and the payload carries TPM tokens, so
   # the segment reads exactly $TPM. The tokens are given both as payload totals
   # and as one assistant message in a transcript, covering the script before
-  # and after it switched to reading the transcript.
+  # and after it switched to reading the transcript. The message carries a
+  # non-zero input context because the script drops zero-usage entries (Claude
+  # Code writes those after API errors); only its output counts toward the rate.
   transcript="$tmp/transcripts/$name.jsonl"
   mkdir -p "$tmp/transcripts"
-  printf '{"type":"assistant","timestamp":"%s","message":{"id":"msg_%s","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":%s}}}\n' \
+  printf '{"type":"assistant","timestamp":"%s","message":{"id":"msg_%s","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":1000,"output_tokens":%s}}}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "$name" "$TPM" > "$transcript"
 
   now=$(date +%s)
