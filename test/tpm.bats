@@ -149,3 +149,35 @@ load 'helpers'
   run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000
   [[ "$(plain)" == *"8.0k tpm"* ]]
 }
+
+# ─── CLAUDE_STATUSLINE_HIDE ───
+
+@test "hide: CLAUDE_STATUSLINE_HIDE=tpm hides the tpm indicator" {
+  CLAUDE_STATUSLINE_HIDE=tpm run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 2000 1000
+  [[ "$(plain)" != *"tpm"* ]]
+  # The rest of line 1 is unaffected
+  [[ "$(plain)" == *"✦ Opus 4.6"* ]]
+  [[ "$(plain)" == *"25%"* ]]
+}
+
+@test "hide: tpm is matched inside a comma-separated list with spaces" {
+  CLAUDE_STATUSLINE_HIDE="diff, tpm" run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 2000 1000
+  [[ "$(plain)" != *"tpm"* ]]
+}
+
+@test "hide: unrecognized or partial names leave tpm visible" {
+  CLAUDE_STATUSLINE_HIDE=nope run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 2000 1000
+  [[ "$(plain)" == *"3.0k tpm"* ]]
+  CLAUDE_STATUSLINE_HIDE=tpmx run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 2000 1000
+  [[ "$(plain)" == *"3.0k tpm"* ]]
+}
+
+@test "hide: empty value changes nothing" {
+  CLAUDE_STATUSLINE_HIDE= run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 2000 1000
+  [[ "$(plain)" == *"3.0k tpm"* ]]
+}
+
+@test "hide: hidden tpm skips the sliding window state file" {
+  CLAUDE_STATUSLINE_HIDE=tpm run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 2000 1000
+  [ ! -f "/tmp/claude-code-statusline-tpm-${TEST_SID}" ]
+}

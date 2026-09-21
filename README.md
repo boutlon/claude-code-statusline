@@ -54,6 +54,28 @@ Or clone and symlink: `git clone https://github.com/levibe/claude-code-statuslin
 3. Restart Claude Code.
 
 
+## Configuration
+
+Hide indicators you don't want by setting `CLAUDE_STATUSLINE_HIDE` to a comma-separated list of names. Prefix the command in `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "CLAUDE_STATUSLINE_HIDE=tpm ~/.claude/statusline.sh"
+  }
+}
+```
+
+Or add it to the `env` block in the same file, which the statusline inherits.
+
+| Name | Hides |
+|---|---|
+| `tpm` | Throughput (tokens per minute) |
+
+Unknown names are ignored.
+
+
 ## Requirements
 
 - [`jq`](https://jqlang.github.io/jq/) – JSON parsing

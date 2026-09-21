@@ -115,6 +115,13 @@ esac
 # Session-scoped state key (used by model cache and sliding window TPM)
 safe_id=$(printf '%s' "$session_id" | tr -dc 'a-zA-Z0-9_-')
 
+# Indicators to hide, from CLAUDE_STATUSLINE_HIDE: a comma-separated list of
+# indicator names (e.g. "tpm"). Spaces are tolerated; unknown names are ignored.
+hide_tpm=0
+case ",$(printf '%s' "${CLAUDE_STATUSLINE_HIDE:-}" | tr -d ' ')," in
+  *,tpm,*) hide_tpm=1 ;;
+esac
+
 # Temp file cleanup (set once, covers all temp files created below)
 tmpfile=""
 untracked_list=""
@@ -123,9 +130,10 @@ trap 'rm -f "$tmpfile" "$untracked_list"' EXIT
 # Tokens per minute (full-session average as default)
 total_tokens=$((total_in + total_out))
 
-# Subagent tokens (mtime-cached to avoid re-parsing unchanged files)
+# Subagent tokens (mtime-cached to avoid re-parsing unchanged files).
+# Only feeds TPM, so skipped entirely when TPM is hidden.
 subagent_tokens=0
-if [ -n "$transcript_path" ] && [ -n "$safe_id" ]; then
+if [ "$hide_tpm" -eq 0 ] && [ -n "$transcript_path" ] && [ -n "$safe_id" ]; then
   subagent_dir="${transcript_path%.jsonl}/subagents"
   if [ -d "$subagent_dir" ]; then
     subagent_cache="/tmp/${SUBAGENT_STATE_PREFIX}-${safe_id}"
@@ -153,7 +161,8 @@ fi
 subagent_tokens=${subagent_tokens:-0}
 [ "$subagent_tokens" -gt 0 ] 2>/dev/null && total_tokens=$((total_tokens + subagent_tokens))
 
-if [ "$duration_ms" -gt 0 ]; then
+# tpm=0 suppresses the segment, so a hidden indicator simply never computes it.
+if [ "$hide_tpm" -eq 0 ] && [ "$duration_ms" -gt 0 ]; then
   tpm=$(( (total_tokens * 60000) / duration_ms ))
 else
   tpm=0
@@ -230,8 +239,9 @@ if [ "$effective_size" -gt 0 ] 2>/dev/null; then
   fi
 fi
 
-# Sliding window TPM (overrides full-session average when enough data)
-if [ -n "$safe_id" ]; then
+# Sliding window TPM (overrides full-session average when enough data).
+# Skipped when hidden so no state file is touched.
+if [ "$hide_tpm" -eq 0 ] && [ -n "$safe_id" ]; then
   state_file="/tmp/${TPM_STATE_PREFIX}-${safe_id}"
   restart_sentinel="${state_file}.restart"
   # If the state file is missing (eviction or first run), clear any orphaned
