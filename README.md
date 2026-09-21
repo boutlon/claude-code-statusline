@@ -4,7 +4,7 @@
 [![POSIX shell](https://img.shields.io/badge/Shell-POSIX-green.svg)](statusline.sh)
 [![macOS / Linux](https://img.shields.io/badge/macOS_|_Linux-compatible-lightgrey.svg)]()
 
-A minimal Claude Code statusline showing branch, diff, model, context, throughput, and rate limit usage.
+A minimal Claude Code statusline showing branch, diff, model, context, throughput, rate limit usage, and prompt cache state.
 
 <img width="685" height="100" alt="Screenshot" src="https://github.com/user-attachments/assets/5ce0a134-6b07-4754-8b9c-dca3e8fc6574" />
 
@@ -26,6 +26,7 @@ A minimal Claude Code statusline showing branch, diff, model, context, throughpu
 | **Context** | Usage bar and percentage, scaled so 100% matches the actual autocompact point | Grey <35%, yellow-green 35%, yellow 50%, orange 75%, red 90% |
 | **Throughput** | Tokens per minute | Grey <1k, yellow 1k, orange 5k, red 10k, violet 20k |
 | **Rate limits** | 5-hour and 7-day usage with countdown. Shown on first use, when on pace to hit the limit, and at or above 75%. Hidden means comfortable pace | Grey <50%, yellow 50%, orange 75%, red 90% |
+| **Prompt cache** | Countdown to the cached prefix going cold, then `cache cold` until the next response warms it. Shown only in the last 10 minutes or once cold. Hidden means warm with time to spare | Yellow 10m, orange 5m, red 2m, blue when cold |
 
 Indicators without data are hidden rather than shown empty.
 
@@ -46,10 +47,13 @@ Or clone and symlink: `git clone https://github.com/levibe/claude-code-statuslin
 {
   "statusLine": {
     "type": "command",
-    "command": "~/.claude/statusline.sh"
+    "command": "~/.claude/statusline.sh",
+    "refreshInterval": 30
   }
 }
 ```
+
+`refreshInterval` re-runs the script every 30 seconds while the session is idle so the prompt cache countdown keeps ticking. Without it the segment still updates on every event and still flips to cold at the right moment, it just stays fixed between events.
 
 3. Restart Claude Code.
 
@@ -69,6 +73,7 @@ Or clone and symlink: `git clone https://github.com/levibe/claude-code-statuslin
 - TPM uses a 5-minute sliding window and includes subagent token usage
 - Shows short SHA on detached HEAD; falls back to symbolic ref in empty repos
 - Marks a linked git worktree with a distinct icon and color, separating it from the main checkout
+- Computes prompt cache warmth from `expires_at` against the clock rather than trusting the `warm` flag, which can lag when Claude Code re-runs the script at the moment of expiry (requires Claude Code 2.1.251 or later for `prompt_cache`)
 - Uses `--no-optional-locks` on all git calls to prevent lock contention
 - Fixes model name bleeding across sessions ([CC bug](https://github.com/anthropics/claude-code/issues/19570))
 - Validates model names to filter garbled input from Claude Code
