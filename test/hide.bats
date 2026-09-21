@@ -93,6 +93,20 @@ make_repo() {
   [ ! -f "/tmp/claude-code-statusline-usage-${TEST_SID}" ]
 }
 
+# ─── cache ───
+
+@test "hide: cache hides the prompt cache segment" {
+  now=$(date +%s)
+  # Cold cache would otherwise always render on line 2
+  make_json "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 \
+    | jq --argjson exp "$((now - 60))" '.prompt_cache = { warm: false, ttl: "1h", expires_at: $exp }' \
+    > "$BATS_TEST_TMPDIR/payload.json"
+  run env CLAUDE_STATUSLINE_HIDE=cache CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=100 sh "$SCRIPT" < "$BATS_TEST_TMPDIR/payload.json"
+  [ "$status" -eq 0 ]
+  [[ "$(plain)" != *"cache"* ]]
+  [[ "$output" != *$'\n'* ]]
+}
+
 # ─── combinations ───
 
 @test "hide: all of line 1 leaves line 2 without a leading blank line" {
@@ -103,7 +117,10 @@ make_repo() {
 
 @test "hide: everything produces empty output" {
   now=$(date +%s)
-  CLAUDE_STATUSLINE_HIDE=branch,diff,model,context,tpm,limits run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "" "" 90 "$((now + 9000))" "" ""
+  make_json "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "" "" 90 "$((now + 9000))" "" "" \
+    | jq --argjson exp "$((now - 60))" '.prompt_cache = { warm: false, ttl: "1h", expires_at: $exp }' \
+    > "$BATS_TEST_TMPDIR/payload.json"
+  run env CLAUDE_STATUSLINE_HIDE=branch,diff,model,context,tpm,limits,cache CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=100 sh "$SCRIPT" < "$BATS_TEST_TMPDIR/payload.json"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }

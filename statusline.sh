@@ -122,8 +122,9 @@ esac
 safe_id=$(printf '%s' "$session_id" | tr -dc 'a-zA-Z0-9_-')
 
 # Indicators to hide, from CLAUDE_STATUSLINE_HIDE: a comma-separated list of
-# names (branch, diff, model, context, tpm, limits). Spaces are tolerated and
-# unknown names are ignored. A hidden indicator also skips the work behind it.
+# names (branch, diff, model, context, tpm, limits, cache). Spaces are
+# tolerated and unknown names are ignored. A hidden indicator also skips the
+# work behind it.
 hide_list=",$(printf '%s' "${CLAUDE_STATUSLINE_HIDE:-}" | tr -d ' '),"
 hidden() {
   case "$hide_list" in *,"$1",*) return 0 ;; esac
@@ -501,7 +502,7 @@ fi
 # cache reaches expires_at, but the payload it hands over may still say warm.
 # Hidden while comfortably warm (> CACHE_SHOW_S left) or when there is no data.
 cache_seg=""
-if [ -n "$cache_expires" ]; then
+if ! hidden cache && [ -n "$cache_expires" ]; then
   _now=${_now:-$(date +%s)}
   cache_left=$((cache_expires - _now))
   if [ "$cache_warm" != "true" ] || [ "$cache_left" -le 0 ]; then

@@ -81,6 +81,7 @@ Or add it to the `env` block in the same file, which the statusline inherits.
 | `context` | Context usage bar and percentage |
 | `tpm` | Throughput (tokens per minute) |
 | `limits` | 5-hour and 7-day rate limits |
+| `cache` | Prompt cache countdown and cold state |
 
 Unknown names are ignored. A hidden indicator also skips the work behind it, so hiding `diff` avoids the git diff scan and hiding `tpm` avoids the sliding-window bookkeeping.
 
