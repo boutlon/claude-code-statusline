@@ -168,6 +168,17 @@ load 'helpers'
   [[ "$(plain)" == *"2.3k tpm"* ]]
 }
 
+@test "tpm: floor widens the divisor but not the lookback after a resume" {
+  # Session is 20s old; a message from 40s ago belongs to the previous process
+  add_message 40 0 0 0 60000
+  run run_tpm 20000
+  [[ "$(plain)" != *"tpm"* ]]
+  # A message from 10s ago counts, spread over the one-minute floor
+  add_message 10 0 0 0 3000
+  run run_tpm 20000
+  [[ "$(plain)" == *"3.0k tpm"* ]]
+}
+
 @test "tpm: idle session shows nothing rather than a session average" {
   add_message 400 0 0 200000 5000
   run run_tpm 499000000

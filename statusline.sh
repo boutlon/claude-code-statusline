@@ -152,19 +152,30 @@ trap 'rm -f "$untracked_list"' EXIT
 # which restarts from zero on resume even though cost carries over), so a
 # resumed session doesn't inherit pre-resume messages and a fresh one gets
 # a real rate from its first response, with a one-minute floor so that
-# first response isn't divided by a handful of seconds. Only files modified
-# inside the window are parsed, and only their tails; assistant lines are a
-# few percent of a transcript's bytes, so grep narrows the input before jq
-# parses it. A busy five minutes can write several MB, hence the 16MB tail.
+# first response isn't divided by a handful of seconds. The floor widens the
+# divisor only, never the lookback, so a session resumed seconds ago still
+# sees nothing from the previous process. Only files modified inside the
+# window are parsed, and only their tails; assistant lines are a few percent
+# of a transcript's bytes, so grep narrows the input before jq parses it. A
+# busy five minutes can write several MB, hence the 16MB tail.
+#
+# The cutoff is a UTC ISO-8601 string compared lexically against the
+# transcript's timestamps (always UTC with a Z suffix). jq 1.6, still what
+# apt ships, parses ISO dates in local time, so no date parsing happens in jq.
 tpm=0
 if ! hidden tpm && [ -n "$transcript_path" ] && [ "$duration_ms" -gt 0 ] 2>/dev/null; then
-  window_ms=$TPM_WINDOW_MS
-  [ "$duration_ms" -lt "$window_ms" ] && window_ms=$duration_ms
+  lookback_ms=$TPM_WINDOW_MS
+  [ "$duration_ms" -lt "$lookback_ms" ] && lookback_ms=$duration_ms
+  window_ms=$lookback_ms
   [ "$window_ms" -lt "$TPM_WINDOW_MIN_MS" ] && window_ms=$TPM_WINDOW_MIN_MS
   window_files=$(find "$transcript_path" "${transcript_path%.jsonl}/subagents" \
     -maxdepth 1 -name '*.jsonl' -mmin "-$((TPM_WINDOW_MS / 60000))" 2>/dev/null)
-  if [ -n "$window_files" ]; then
-    cutoff=$(( $(date +%s) - window_ms / 1000 ))
+  cutoff_s=$(( $(date +%s) - lookback_ms / 1000 ))
+  # BSD date takes -r <epoch>, GNU date takes -d @<epoch>
+  cutoff=$(date -u -r "$cutoff_s" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -d "@$cutoff_s" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+  # An empty cutoff would admit the whole tail, so require one
+  if [ -n "$window_files" ] && [ -n "$cutoff" ]; then
     window_tokens=$(printf '%s\n' "$window_files" | while IFS= read -r f; do
         # dd with a 1MB block skip, not tail -c: BSD tail walks the whole
         # file for a byte count, which costs ~0.3s on a 13MB transcript.
@@ -173,17 +184,17 @@ if ! hidden tpm && [ -n "$transcript_path" ] && [ "$duration_ms" -gt 0 ] 2>/dev/
           dd if="$f" bs=1048576 skip=$(( (size - TPM_TAIL_BYTES) / 1048576 )) 2>/dev/null
         else
           cat "$f"
-        fi | grep -a -F '"type":"assistant"' | jq -nR --argjson cutoff "$cutoff" '
+        fi | grep -a -F '"type":"assistant"' | jq -nR --arg cutoff "$cutoff" '
           [ inputs | fromjson? | select(.type == "assistant") | .message as $m
-            | select($m.id != null and (.timestamp | type) == "string")
+            | select($m.id != null and (.timestamp | type) == "string"
+                     and (.timestamp | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$")))
             | { id: $m.id, ts: .timestamp,
-                epoch: (.timestamp | try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null),
                 ctx: (($m.usage.input_tokens // 0) + ($m.usage.cache_creation_input_tokens // 0)
                       + ($m.usage.cache_read_input_tokens // 0)),
                 out: ($m.usage.output_tokens // 0) } ]
           | group_by(.id) | map(max_by(.out)) | sort_by(.ts)
           | [ range(length) as $i | .[$i] + { prev: (if $i > 0 then .[$i - 1].ctx else null end) } ]
-          | map(select(.epoch != null and .epoch >= $cutoff)
+          | map(select(.ts >= $cutoff)
                 | .out + (if .prev == null then 0 else ([.ctx - .prev, 0] | max) end))
           | add // 0
         ' 2>/dev/null
