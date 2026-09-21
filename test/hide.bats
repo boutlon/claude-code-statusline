@@ -16,19 +16,22 @@ make_repo() {
 # ─── CLAUDE_STATUSLINE_HIDE parsing ───
 
 @test "hide: names are matched inside a comma-separated list with spaces" {
-  CLAUDE_STATUSLINE_HIDE="diff, tpm" run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 2000 1000
+  add_message 10 0 0 0 3000
+  CLAUDE_STATUSLINE_HIDE="diff, tpm" run run_tpm
   [[ "$(plain)" != *"tpm"* ]]
 }
 
 @test "hide: unrecognized or partial names change nothing" {
-  CLAUDE_STATUSLINE_HIDE=nope run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 2000 1000
+  add_message 10 0 0 0 3000
+  CLAUDE_STATUSLINE_HIDE=nope run run_tpm
   [[ "$(plain)" == *"3.0k tpm"* ]]
-  CLAUDE_STATUSLINE_HIDE=tpmx run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 2000 1000
+  CLAUDE_STATUSLINE_HIDE=tpmx run run_tpm
   [[ "$(plain)" == *"3.0k tpm"* ]]
 }
 
 @test "hide: empty value changes nothing" {
-  CLAUDE_STATUSLINE_HIDE= run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 2000 1000
+  add_message 10 0 0 0 3000
+  CLAUDE_STATUSLINE_HIDE= run run_tpm
   [ "$(plain)" = "✦ Opus 4.6  █░░░░ 25%  ϟ 3.0k tpm" ]
 }
 
@@ -58,14 +61,16 @@ make_repo() {
 # ─── model / context ───
 
 @test "hide: model hides the model name and 1M marker" {
-  CLAUDE_STATUSLINE_HIDE=model run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 2000 1000 "" "" "" "" "" "" 1000000
+  add_message 10 0 0 0 3000
+  CLAUDE_STATUSLINE_HIDE=model run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 0 0 "" "$(transcript_path)" "" "" "" "" 1000000
   [[ "$(plain)" != *"✦"* ]]
   [[ "$(plain)" != *"1M"* ]]
   [ "$(plain)" = "█░░░░ 25%  ϟ 3.0k tpm" ]
 }
 
 @test "hide: context hides the bar and percentage" {
-  CLAUDE_STATUSLINE_HIDE=context run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 2000 1000
+  add_message 10 0 0 0 3000
+  CLAUDE_STATUSLINE_HIDE=context run run_tpm
   [[ "$(plain)" != *"25%"* ]]
   [ "$(plain)" = "✦ Opus 4.6  ϟ 3.0k tpm" ]
 }
@@ -73,13 +78,9 @@ make_repo() {
 # ─── tpm ───
 
 @test "hide: tpm hides the tpm indicator" {
-  CLAUDE_STATUSLINE_HIDE=tpm run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 2000 1000
+  add_message 10 0 0 0 3000
+  CLAUDE_STATUSLINE_HIDE=tpm run run_tpm
   [ "$(plain)" = "✦ Opus 4.6  █░░░░ 25%" ]
-}
-
-@test "hide: hidden tpm skips the sliding window state file" {
-  CLAUDE_STATUSLINE_HIDE=tpm run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 2000 1000
-  [ ! -f "/tmp/claude-code-statusline-tpm-${TEST_SID}" ]
 }
 
 # ─── limits ───

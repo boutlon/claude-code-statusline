@@ -4,38 +4,39 @@ load 'helpers'
 
 # ─── Subagent tokens ───
 
-@test "subagent: tokens added to total" {
-  local transcript_dir
-  transcript_dir=$(mktemp -d)/transcript
-  mkdir -p "${transcript_dir}/subagents"
-  # Create a minimal subagent JSONL with one assistant message
-  printf '{"type":"assistant","message":{"id":"msg_1","usage":{"input_tokens":100,"output_tokens":50}}}\n' \
-    > "${transcript_dir}/subagents/agent-1.jsonl"
-  local tp="${transcript_dir}.jsonl"
-  touch "$tp"
-  # 8000 base tokens + 150 subagent = 8150, in 60s = 8150 tpm
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "" "$tp"
-  [[ "$(plain)" == *"8.1k tpm"* ]]
-  rm -rf "$(dirname "$transcript_dir")"
+subagent_file() {
+  printf '%s/%s/subagents/agent-%s.jsonl' "$BATS_TEST_TMPDIR" "$TEST_SID" "$1"
 }
 
-@test "subagent: cache hit on unchanged files" {
-  local transcript_dir
-  transcript_dir=$(mktemp -d)/transcript
-  mkdir -p "${transcript_dir}/subagents"
-  printf '{"type":"assistant","message":{"id":"msg_1","usage":{"input_tokens":100,"output_tokens":50}}}\n' \
-    > "${transcript_dir}/subagents/agent-1.jsonl"
-  local tp="${transcript_dir}.jsonl"
-  touch "$tp"
-  # First call: parses and caches
-  invoke "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "" "$tp"
-  local cache="/tmp/claude-code-statusline-subagent-${TEST_SID}"
-  [ -f "$cache" ]
-  local first_fp
-  first_fp=$(head -1 "$cache")
-  # Second call: same files, should use cache (fingerprint unchanged)
-  invoke "Opus 4.6" 25 "$TEST_SID" 120000 6000 4000 "" "$tp"
-  [ "$(head -1 "$cache")" = "$first_fp" ]
-  [ "$(tail -1 "$cache")" = "150" ]
-  rm -rf "$(dirname "$transcript_dir")"
+@test "subagent: work is added to the main transcript's" {
+  add_message 10 0 0 0 500
+  add_message 10 0 0 0 100 msg_a1 "$(subagent_file 1)"
+  add_message 10 0 0 0 100 msg_b1 "$(subagent_file 2)"
+  run run_tpm
+  [[ "$(plain)" == *"ϟ 700 tpm"* ]]
+}
+
+@test "subagent: context growth is measured within each file, not across files" {
+  # Main: 1000 -> 1500 context (+500) plus 100 output
+  add_message 20 0 0 1000 0
+  add_message 10 0 500 1000 100
+  # Agent: 100k context (first in file, output only) then +200 plus 50
+  add_message 15 0 0 100000 50 msg_a1 "$(subagent_file 1)"
+  add_message 10 0 200 100000 50 msg_a2 "$(subagent_file 1)"
+  run run_tpm
+  [[ "$(plain)" == *"ϟ 900 tpm"* ]]
+}
+
+@test "subagent: messages outside the window are ignored" {
+  add_message 10 0 0 0 500
+  add_message 400 0 0 100000 50000 msg_old "$(subagent_file 1)"
+  run run_tpm 600000
+  [[ "$(plain)" == *"ϟ 100 tpm"* ]]
+}
+
+@test "subagent: transcripts count even when the main transcript is quiet" {
+  add_message 400 0 0 0 500
+  add_message 10 0 0 0 150 msg_a1 "$(subagent_file 1)"
+  run run_tpm 600000
+  [[ "$(plain)" == *"ϟ 30 tpm"* ]]
 }
