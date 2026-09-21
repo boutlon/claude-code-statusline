@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Compute TPM from the session transcript instead of the context-window snapshot, which measured context growth rather than throughput. Fixes the inflated rate in a new session's first minutes, the permanent non-zero rate on idle sessions, the stale rate after compaction, and the multi-million spike on resume once the `/tmp` state file was gone
+- Count only tokens added to the conversation plus output, so re-reading context or rewriting it after the cache goes cold no longer registers as throughput
+
+### Removed
+
+- The sliding-window and subagent state files in `/tmp` and the resume sentinel; the transcript is the only source
+
 ## 1.6.0
 
 ### Added

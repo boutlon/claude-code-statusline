@@ -20,9 +20,6 @@ cleanup_state() {
   local sid
   sid=$(printf '%s' "$1" | tr -dc 'a-zA-Z0-9_-')
   rm -f "/tmp/claude-code-statusline-model-${sid}"
-  rm -f "/tmp/claude-code-statusline-tpm-${sid}"
-  rm -f "/tmp/claude-code-statusline-tpm-${sid}.restart"
-  rm -f "/tmp/claude-code-statusline-subagent-${sid}"
   rm -f "/tmp/claude-code-statusline-usage-${sid}"
 }
 
@@ -105,6 +102,33 @@ invoke() {
 # when set (so individual tests can inject their own override value).
 run_sl_rescaled() {
   make_json "$@" | sh "$SCRIPT"
+}
+
+# This test's transcript. add_message creates it on first use; the script's
+# TPM window reads it (and any agent-*.jsonl under <transcript>/subagents/).
+transcript_path() {
+  printf '%s/%s.jsonl' "$BATS_TEST_TMPDIR" "$TEST_SID"
+}
+
+# Append an assistant message to a transcript file (the main one by default).
+# Args: age_seconds input cache_creation cache_read output [message_id] [file]
+add_message() {
+  local age="$1" in="$2" cc="$3" cr="$4" out="$5"
+  local id="${6:-msg_${RANDOM}${RANDOM}}"
+  local file="${7:-$(transcript_path)}"
+  local ts
+  ts=$(date -u -v-"${age}S" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null \
+    || date -u -d "-${age} seconds" +%Y-%m-%dT%H:%M:%S.000Z)
+  mkdir -p "$(dirname "$file")"
+  printf '{"type":"assistant","timestamp":"%s","message":{"id":"%s","usage":{"input_tokens":%s,"cache_creation_input_tokens":%s,"cache_read_input_tokens":%s,"output_tokens":%s}}}\n' \
+    "$ts" "$id" "$in" "$cc" "$cr" "$out" >> "$file"
+}
+
+# Run the script against this test's transcript with a given session age.
+# With a 60s session the window equals the session, so tpm == tokens of work in window.
+# Args: duration_ms [model] [used]
+run_tpm() {
+  run_sl "${2:-Opus 4.6}" "${3:-25}" "$TEST_SID" "${1:-60000}" 0 0 "" "$(transcript_path)"
 }
 
 # Strip ANSI escape codes from $output

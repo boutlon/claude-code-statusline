@@ -2,10 +2,10 @@
 # Line 1: ⌥ branch  +N -N  ✦ model  ██▒░░ N%  ϟ N tpm
 # Line 2: 5h N% XhYm  7d N% XdYh  cache Nm   (rate limits shown when on pace / ≥75%; cache when ≤10m left or cold)
 
-TPM_STATE_PREFIX="claude-code-statusline-tpm"
-TPM_WINDOW_MS=300000  # 5 minutes
+TPM_WINDOW_MS=300000     # 5 minutes
+TPM_WINDOW_MIN_MS=60000  # floor: never divide a single early response by a few seconds
+TPM_TAIL_BYTES=16777216  # bytes read from the end of each transcript file
 MODEL_STATE_PREFIX="claude-code-statusline-model"
-SUBAGENT_STATE_PREFIX="claude-code-statusline-subagent"
 USAGE_STATE_PREFIX="claude-code-statusline-usage"
 USAGE_FIRST_WINDOW_S=5   # seconds to show rate limits on first invocation
 CACHE_SHOW_S=600         # show the prompt cache countdown at or below this many seconds left
@@ -84,8 +84,6 @@ eval "$(echo "$input" | jq -r '
   "used=\(.context_window.used_percentage // 0 | floor | @sh)",
   "model=\(.model.display_name // "unknown" | sub(" *\\(.*\\)"; "") | @sh)",
   "ctx_size=\(.context_window.context_window_size // 0 | floor | @sh)",
-  "total_in=\(.context_window.total_input_tokens // 0 | floor | @sh)",
-  "total_out=\(.context_window.total_output_tokens // 0 | floor | @sh)",
   "duration_ms=\(.cost.total_duration_ms // 0 | floor | @sh)",
   "rl_5h_pct=\(.rate_limits.five_hour.used_percentage // "" | @sh)",
   "rl_5h_reset=\(.rate_limits.five_hour.resets_at // "" | @sh)",
@@ -98,7 +96,7 @@ eval "$(echo "$input" | jq -r '
 # Defaults if jq fails or fields are missing
 cwd=${cwd:-}; session_id=${session_id:-}; transcript_path=${transcript_path:-}
 used=${used:-0}; model=${model:-unknown}; ctx_size=${ctx_size:-0}
-total_in=${total_in:-0}; total_out=${total_out:-0}; duration_ms=${duration_ms:-0}
+duration_ms=${duration_ms:-0}
 rl_5h_pct=${rl_5h_pct:-}; rl_5h_reset=${rl_5h_reset:-}
 rl_7d_pct=${rl_7d_pct:-}; rl_7d_reset=${rl_7d_reset:-}
 cache_warm=${cache_warm:-}; cache_expires=${cache_expires:-}
@@ -132,49 +130,89 @@ hidden() {
 }
 
 # Temp file cleanup (set once, covers all temp files created below)
-tmpfile=""
 untracked_list=""
-trap 'rm -f "$tmpfile" "$untracked_list"' EXIT
+trap 'rm -f "$untracked_list"' EXIT
 
-# Tokens per minute (full-session average as default)
-total_tokens=$((total_in + total_out))
-
-# Subagent tokens (mtime-cached to avoid re-parsing unchanged files).
-# Only feeds TPM, so skipped entirely when TPM is hidden.
-subagent_tokens=0
-if ! hidden tpm && [ -n "$transcript_path" ] && [ -n "$safe_id" ]; then
-  subagent_dir="${transcript_path%.jsonl}/subagents"
-  if [ -d "$subagent_dir" ]; then
-    subagent_cache="/tmp/${SUBAGENT_STATE_PREFIX}-${safe_id}"
-    # Fingerprint: size:mtime:path per file, joined into one line
-    if stat -c '%s' /dev/null >/dev/null 2>&1; then
-      fingerprint=$(stat -c '%s:%Y:%n' "$subagent_dir"/agent-*.jsonl 2>/dev/null | tr '\n' '|')
-    else
-      fingerprint=$(stat -f '%z:%m:%N' "$subagent_dir"/agent-*.jsonl 2>/dev/null | tr '\n' '|')
-    fi
-    if [ -n "$fingerprint" ]; then
-      cached_fp=""
-      [ -f "$subagent_cache" ] && cached_fp=$(head -1 "$subagent_cache")
-      if [ "$fingerprint" = "$cached_fp" ]; then
-        subagent_tokens=$(tail -1 "$subagent_cache")
-      else
-        subagent_tokens=$(cat "$subagent_dir"/agent-*.jsonl 2>/dev/null \
-          | jq -r 'select(.type == "assistant") | "\(.message.id) \(.message.usage.input_tokens // 0) \(.message.usage.output_tokens // 0)"' 2>/dev/null \
-          | awk '{usage[$1]=$2" "$3} END {for(id in usage){split(usage[id],a);s+=a[1]+a[2]} print s+0}')
-        subagent_tokens=${subagent_tokens:-0}
-        printf '%s\n%s\n' "$fingerprint" "$subagent_tokens" > "$subagent_cache"
-      fi
-    fi
+# Tokens per minute: a sliding window over the session transcript.
+#
+# The bolt measures work, not cost. Every assistant line in the transcript
+# carries a timestamp and the API's usage block, and the sum of fresh input,
+# cache writes, and cache reads is the size of the context that call saw.
+# A message's work is how much that context grew over the previous message
+# in the same file (the new tool results and user text) plus its output.
+# The previous output is part of that growth, since it joins the context for
+# the next call, so it is subtracted rather than counted twice. Re-reading
+# existing context, or rewriting it to cache after the cache went cold,
+# moves tokens between usage columns without growing the context, so it
+# doesn't register; line 2 already shows the cache going cold. A shrink
+# (compaction) counts as zero, and the first message in a file has nothing
+# to diff against, so only its output counts. Claude Code also writes
+# synthetic assistant entries after API errors, with an id and timestamp but
+# no usage; anything with no input context is dropped so it can't become a
+# zero baseline that makes the next real response look like all new work.
+# Streaming repeats a message id
+# once per content block with a growing output count, so each id is taken
+# at its largest output. Subagent transcripts are summed the same way.
+#
+# The window is capped at the session's own lifetime (total_duration_ms,
+# which restarts from zero on resume even though cost carries over), so a
+# resumed session doesn't inherit pre-resume messages and a fresh one gets
+# a real rate from its first response, with a one-minute floor so that
+# first response isn't divided by a handful of seconds. The floor widens the
+# divisor only, never the lookback, so a session resumed seconds ago still
+# sees nothing from the previous process. Only files modified inside the
+# window are parsed, and only their tails; assistant lines are a few percent
+# of a transcript's bytes, so grep narrows the input before jq parses it. A
+# busy five minutes can write several MB, hence the 16MB tail.
+#
+# The cutoff is a UTC ISO-8601 string compared lexically against the
+# transcript's timestamps (always UTC with a Z suffix). jq 1.6, still what
+# apt ships, parses ISO dates in local time, so no date parsing happens in jq.
+tpm=0
+if ! hidden tpm && [ -n "$transcript_path" ] && [ "$duration_ms" -gt 0 ] 2>/dev/null; then
+  lookback_ms=$TPM_WINDOW_MS
+  [ "$duration_ms" -lt "$lookback_ms" ] && lookback_ms=$duration_ms
+  window_ms=$lookback_ms
+  [ "$window_ms" -lt "$TPM_WINDOW_MIN_MS" ] && window_ms=$TPM_WINDOW_MIN_MS
+  # BSD find documents rounding file age up to whole minutes, so look one
+  # minute past the window; the timestamp cutoff below enforces the edge.
+  window_files=$(find "$transcript_path" "${transcript_path%.jsonl}/subagents" \
+    -maxdepth 1 -name '*.jsonl' -mmin "-$((TPM_WINDOW_MS / 60000 + 1))" 2>/dev/null)
+  cutoff_s=$(( $(date +%s) - lookback_ms / 1000 ))
+  # BSD date takes -r <epoch>, GNU date takes -d @<epoch>. The .000Z suffix
+  # keeps a fractional timestamp in the cutoff second from sorting below it.
+  cutoff=$(date -u -r "$cutoff_s" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null \
+    || date -u -d "@$cutoff_s" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null)
+  # An empty cutoff would admit the whole tail, so require one
+  if [ -n "$window_files" ] && [ -n "$cutoff" ]; then
+    window_tokens=$(printf '%s\n' "$window_files" | while IFS= read -r f; do
+        # dd with a 1MB block skip, not tail -c: BSD tail walks the whole
+        # file for a byte count, which costs ~0.3s on a 13MB transcript.
+        size=$(wc -c < "$f")
+        if [ "$size" -gt "$TPM_TAIL_BYTES" ] 2>/dev/null; then
+          dd if="$f" bs=1048576 skip=$(( (size - TPM_TAIL_BYTES) / 1048576 )) 2>/dev/null
+        else
+          cat "$f"
+        fi | grep -a -F '"type":"assistant"' | jq -nR --arg cutoff "$cutoff" '
+          [ inputs | fromjson? | select(.type == "assistant") | .message as $m
+            | select($m.id != null and (.timestamp | type) == "string"
+                     and (.timestamp | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$")))
+            | { id: $m.id, ts: .timestamp,
+                ctx: (($m.usage.input_tokens // 0) + ($m.usage.cache_creation_input_tokens // 0)
+                      + ($m.usage.cache_read_input_tokens // 0)),
+                out: ($m.usage.output_tokens // 0) }
+            | select(.ctx > 0) ]
+          | group_by(.id) | map(max_by(.out)) | sort_by(.ts)
+          | [ range(length) as $i | .[$i] + { prev: (if $i > 0 then .[$i - 1] else null end) } ]
+          | map(select(.ts >= $cutoff)
+                | .out + (if .prev == null then 0
+                          else ([.ctx - .prev.ctx - .prev.out, 0] | max) end))
+          | add // 0
+        ' 2>/dev/null
+      done | awk '{ s += $1 } END { print s + 0 }')
+    case "$window_tokens" in ""|*[!0-9]*) window_tokens=0 ;; esac
+    tpm=$(( window_tokens * 60000 / window_ms ))
   fi
-fi
-subagent_tokens=${subagent_tokens:-0}
-[ "$subagent_tokens" -gt 0 ] 2>/dev/null && total_tokens=$((total_tokens + subagent_tokens))
-
-# tpm=0 suppresses the segment, so a hidden indicator simply never computes it.
-if ! hidden tpm && [ "$duration_ms" -gt 0 ]; then
-  tpm=$(( (total_tokens * 60000) / duration_ms ))
-else
-  tpm=0
 fi
 
 # Per-session model cache — prevents global model changes in other sessions
@@ -245,75 +283,6 @@ if [ "$effective_size" -gt 0 ] 2>/dev/null; then
     used=100
   else
     used=$rescaled
-  fi
-fi
-
-# Sliding window TPM (overrides full-session average when enough data).
-# Skipped when hidden so no state file is touched.
-if ! hidden tpm && [ -n "$safe_id" ]; then
-  state_file="/tmp/${TPM_STATE_PREFIX}-${safe_id}"
-  restart_sentinel="${state_file}.restart"
-  # If the state file is missing (eviction or first run), clear any orphaned
-  # sentinel so we don't hide TPM forever when the two files get out of sync.
-  if [ ! -f "$state_file" ]; then
-    : > "$state_file"
-    rm -f "$restart_sentinel"
-  fi
-
-  # Detect session restart (duration_ms went backwards). When we can prove the
-  # resumed session has at least as many tokens as before, seed the state file
-  # with a synthetic baseline at ms=0 so the first post-restart sample produces
-  # a real window_tpm (delta = post-restart tokens / post-restart duration).
-  # When prev_tok > total_tokens (context trim, etc.) the baseline would yield
-  # a negative delta and keep the sentinel set for up to TPM_WINDOW_MS, so we
-  # truncate instead and let the natural sliding window recover after two real
-  # samples. The sentinel forces tpm=0 until window_tpm is non-empty/positive.
-  last_ms=$(tail -n 1 "$state_file" 2>/dev/null | awk '$1 ~ /^[0-9]+$/ { print $1 }')
-  if [ -n "$last_ms" ] && [ "$duration_ms" -lt "$last_ms" ] 2>/dev/null; then
-    prev_tok=$(tail -n 1 "$state_file" 2>/dev/null \
-               | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ { print $2 }')
-    if [ -n "$prev_tok" ] && [ "$prev_tok" -gt 0 ] 2>/dev/null \
-       && [ "$total_tokens" -gt "$prev_tok" ] 2>/dev/null; then
-      printf '0 %s\n' "$prev_tok" > "$state_file"
-    else
-      : > "$state_file"
-    fi
-    : > "$restart_sentinel"
-  fi
-
-  cutoff=$((duration_ms - TPM_WINDOW_MS))
-  [ "$cutoff" -lt 0 ] && cutoff=0
-
-  tmpfile=$(mktemp "/tmp/${TPM_STATE_PREFIX}-XXXXXX")
-
-  window_tpm=$(awk -v cutoff="$cutoff" -v cur_ms="$duration_ms" -v cur_tok="$total_tokens" -v tmpfile="$tmpfile" '
-    BEGIN { oldest_ms = ""; oldest_tok = ""; last_ms = "" }
-    $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $1 + 0 >= cutoff {
-      print > tmpfile
-      if (oldest_ms == "") { oldest_ms = $1 + 0; oldest_tok = $2 + 0 }
-      last_ms = $1 + 0
-    }
-    END {
-      if (last_ms != cur_ms + 0)
-        printf "%s %s\n", cur_ms, cur_tok > tmpfile
-      close(tmpfile)
-      delta_ms = cur_ms - oldest_ms
-      delta_tok = cur_tok - oldest_tok
-      if (oldest_ms != "" && delta_ms > 0)
-        printf "%d", (delta_tok * 60000) / delta_ms
-    }
-  ' "$state_file" 2>/dev/null)
-
-  [ -f "$tmpfile" ] && mv "$tmpfile" "$state_file"
-
-  # When the awk produced a usable rate, take it and clear any restart sentinel.
-  # Otherwise (empty / negative window_tpm), the sentinel keeps the segment
-  # hidden until a real post-restart sample pair produces a positive rate.
-  if [ -n "$window_tpm" ] && [ "$window_tpm" -gt 0 ] 2>/dev/null; then
-    tpm=$window_tpm
-    rm -f "$restart_sentinel"
-  elif [ -f "$restart_sentinel" ]; then
-    tpm=0
   fi
 fi
 

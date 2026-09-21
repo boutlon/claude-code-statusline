@@ -2,56 +2,229 @@
 
 load 'helpers'
 
+# add_message args: age_seconds input cache_creation cache_read output [id] [file]
+# A message's work is its context growth over the previous message in the
+# same file (context = input + cache_creation + cache_read), less the previous
+# message's output (which joins the next context), plus its own output. The
+# first message in a file has nothing to diff against, so only its output
+# counts. Real responses always have some input context, and entries without
+# any are dropped, so fixtures carry a nominal 1000 cache-read tokens. With a 60s session the window equals the session, so tpm == tokens.
+
 # ─── TPM calculation ───
 
 @test "tpm: not shown when duration is zero" {
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 0 0 0
+  add_message 10 0 0 1000 500
+  run run_tpm 0
   [[ "$(plain)" != *"tpm"* ]]
 }
 
-@test "tpm: not shown when tokens are zero" {
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 0 0
+@test "tpm: not shown without a transcript" {
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000
+  [[ "$(plain)" != *"tpm"* ]]
+}
+
+@test "tpm: not shown when the transcript has no messages in the window" {
+  add_message 400 5000 0 0 3000
+  run run_tpm 600000
   [[ "$(plain)" != *"tpm"* ]]
 }
 
 @test "tpm: shows raw number below 1k" {
-  # 500 in + 0 out in 60s = 500 tpm
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 500 0
+  add_message 10 0 0 1000 500
+  run run_tpm
   [[ "$(plain)" == *"ϟ 500 tpm"* ]]
 }
 
 @test "tpm: shows N.Nk for 1000-9999" {
-  # 3000 tokens in 60s = 3000 tpm
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 2000 1000
+  add_message 10 0 0 1000 3000
+  run run_tpm
   [[ "$(plain)" == *"3.0k tpm"* ]]
 }
 
 @test "tpm: shows N.Nk for 10k-99.9k and integer for 100k+" {
-  # 20000 tokens in 60s = 20000 tpm
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 12000 8000
+  add_message 10 0 0 1000 20000
+  run run_tpm
   [[ "$(plain)" == *"20.0k tpm"* ]]
-  # 100000 tokens in 60s = 100000 tpm
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 60000 40000
+  add_message 5 0 0 1000 80000
+  run run_tpm
   [[ "$(plain)" == *"100k tpm"* ]]
 }
 
 @test "tpm: shows N.NM for 1M-99.9M" {
-  # 1500000 tokens in 60s = 1500000 tpm
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 1000000 500000
+  add_message 10 0 0 1000 1500000
+  run run_tpm
   [[ "$(plain)" == *"1.5M tpm"* ]]
 }
 
 @test "tpm: shows integer M for 100M+" {
-  # 100000000 tokens in 60s = 100000000 tpm
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 60000000 40000000
+  add_message 10 0 0 1000 100000000
+  run run_tpm
   [[ "$(plain)" == *"100M tpm"* ]]
+}
+
+# ─── What counts as work ───
+
+@test "tpm: counts context growth plus output, not context size" {
+  # First message: 50k context, only its 100 output counts
+  add_message 20 2 50000 0 100
+  # Second: context 53034, +3034 over the first, of which 100 is the first's
+  # output; 2932 new plus 200 output
+  add_message 10 32 3000 50002 200
+  run run_tpm
+  [[ "$(plain)" == *"3.2k tpm"* ]]
+}
+
+@test "tpm: rewriting a cold cache is not new work" {
+  # Warm call: 100k read. Then the cache expires and the whole context is
+  # rewritten as cache creation; only the 500 new tokens and output count.
+  add_message 20 2 0 100000 100
+  add_message 10 2 100500 0 100
+  run run_tpm
+  # 100 + (400 new + 100 output)
+  [[ "$(plain)" == *"ϟ 600 tpm"* ]]
+}
+
+@test "tpm: a shrinking context (compaction) counts as zero growth" {
+  add_message 20 0 0 200000 100
+  add_message 10 0 50000 0 100
+  run run_tpm
+  [[ "$(plain)" == *"ϟ 200 tpm"* ]]
+}
+
+@test "tpm: previous output entering the next context is not counted twice" {
+  add_message 20 0 0 1000 1000
+  # Context grew by exactly the previous output: no new input
+  add_message 10 0 1000 1000 100
+  run run_tpm
+  [[ "$(plain)" == *"1.1k tpm"* ]]
+}
+
+@test "tpm: growth is measured against the last message even outside the window" {
+  # The old message's own tokens don't count, but it is the baseline
+  add_message 400 0 0 10000 300
+  add_message 10 0 500 10000 100
+  run run_tpm 600000
+  # (500 - 300) + 100 = 300 tokens over a full 5-minute window = 60 tpm
+  [[ "$(plain)" == *"ϟ 60 tpm"* ]]
+}
+
+@test "tpm: streamed blocks with the same message id count once, at their final output" {
+  add_message 20 0 0 1000 0
+  # Streaming repeats the id per content block with a growing output count
+  add_message 10 0 500 1000 2 msg_stream
+  add_message 10 0 500 1000 204 msg_stream
+  run run_tpm
+  [[ "$(plain)" == *"ϟ 704 tpm"* ]]
+}
+
+@test "tpm: sums every message inside the window" {
+  # 100, then (300 - 100) + 100, then (300 - 100) + 100
+  add_message 50 0 0 1000 100
+  add_message 30 0 300 1000 100
+  add_message 10 0 300 1300 100
+  run run_tpm
+  [[ "$(plain)" == *"ϟ 700 tpm"* ]]
+}
+
+@test "tpm: a synthetic error entry with no usage does not reset the baseline" {
+  add_message 30 0 0 100000 100
+  # Claude Code writes this after an API error: real id and timestamp, no usage
+  printf '{"type":"assistant","timestamp":"%s","isApiErrorMessage":true,"message":{"id":"msg_err","model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0}}}\n' \
+    "$(date -u -v-20S +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null || date -u -d '-20 seconds' +%Y-%m-%dT%H:%M:%S.000Z)" >> "$(transcript_path)"
+  add_message 10 0 500 100000 100
+  run run_tpm
+  # 100 + (500 - 100) + 100, not 100 + 100500 + 100
+  [[ "$(plain)" == *"ϟ 600 tpm"* ]]
+}
+
+@test "tpm: skips lines that are not assistant messages or not valid JSON" {
+  printf '{"type":"user","timestamp":"2099-01-01T00:00:00Z","message":{"id":"u1","usage":{"output_tokens":9999}}}\n' >> "$(transcript_path)"
+  printf 'not json at all\n' >> "$(transcript_path)"
+  printf '{"type":"assistant","message":{"id":"no_ts","usage":{"output_tokens":9999}}}\n' >> "$(transcript_path)"
+  add_message 10 0 0 1000 500
+  run run_tpm
+  [[ "$(plain)" == *"ϟ 500 tpm"* ]]
+}
+
+@test "tpm: tolerates the partial line left by reading only the file tail" {
+  # A first line larger than the tail read; the cut lands mid-line
+  head -c 17000000 /dev/zero | tr '\0' 'x' > "$(transcript_path)"
+  printf '\n' >> "$(transcript_path)"
+  add_message 10 0 0 1000 500
+  run run_tpm
+  [[ "$(plain)" == *"ϟ 500 tpm"* ]]
+}
+
+@test "tpm: counts messages behind several MB of tool output inside the window" {
+  add_message 20 0 0 1000 500
+  # 6MB of user-side tool results after it, as a busy five minutes can write
+  printf '{"type":"user","message":{"content":"%s"}}\n' "$(head -c 6000000 /dev/zero | tr '\0' 'x')" >> "$(transcript_path)"
+  add_message 10 0 0 1000 500
+  run run_tpm
+  [[ "$(plain)" == *"ϟ 1.0k tpm"* ]]
+}
+
+# ─── Session lifetime ───
+
+@test "tpm: window is capped at the session lifetime" {
+  # 3000 tokens in a 2-minute-old session = 1500 tpm, not 3000/5min
+  add_message 10 0 0 1000 3000
+  run run_tpm 120000
+  [[ "$(plain)" == *"1.5k tpm"* ]]
+}
+
+@test "tpm: window never shrinks below one minute" {
+  # A first response 10s into a session is spread over a minute, not 10s
+  add_message 5 0 0 1000 3000
+  run run_tpm 10000
+  [[ "$(plain)" == *"3.0k tpm"* ]]
+}
+
+@test "tpm: resumed session ignores messages from before the process started" {
+  # 60k tokens two minutes ago belong to the previous process (session is 90s old)
+  add_message 120 0 0 60000 1000
+  run run_tpm 90000
+  [[ "$(plain)" != *"tpm"* ]]
+  # First post-resume response: growth over the pre-resume message (less its
+  # output) plus own output
+  add_message 10 0 3000 60000 500
+  run run_tpm 90000
+  # (3000 - 1000) + 500 = 2500 tokens over 90s = 1666 tpm
+  [[ "$(plain)" == *"1.6k tpm"* ]]
+}
+
+@test "tpm: floor widens the divisor but not the lookback after a resume" {
+  # Session is 20s old; a message from 40s ago belongs to the previous process
+  add_message 40 0 0 1000 60000
+  run run_tpm 20000
+  [[ "$(plain)" != *"tpm"* ]]
+  # A message from 10s ago counts, spread over the one-minute floor
+  add_message 10 0 0 1000 3000
+  run run_tpm 20000
+  [[ "$(plain)" == *"3.0k tpm"* ]]
+}
+
+@test "tpm: a transcript last written late in the window still counts" {
+  # BSD find documents rounding file age up to whole minutes; a file 4.5
+  # minutes old must not be prefiltered out of the 5-minute window
+  add_message 270 0 0 1000 3000
+  touch -t "$(date -v-270S +%Y%m%d%H%M.%S 2>/dev/null || date -d '-270 seconds' +%Y%m%d%H%M.%S)" "$(transcript_path)"
+  run run_tpm 600000
+  # 3000 tokens over 5 minutes = 600 tpm
+  [[ "$(plain)" == *"ϟ 600 tpm"* ]]
+}
+
+@test "tpm: idle session shows nothing rather than a session average" {
+  add_message 400 0 0 200000 5000
+  run run_tpm 499000000
+  [[ "$(plain)" != *"tpm"* ]]
 }
 
 # ─── TPM bolt colors ───
 
 @test "bolt: no color below 1000 tpm" {
-  # 500 tpm -> plain bolt
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 500 0
+  add_message 10 0 0 1000 500
+  run run_tpm
   # Should NOT have any color code immediately before the bolt
   [[ "$output" != *$'\033[93m'"ϟ"* ]]
   [[ "$output" != *$'\033[38;5;209m'"ϟ"* ]]
@@ -60,92 +233,31 @@ load 'helpers'
 }
 
 @test "bolt: yellow at 1000 tpm" {
-  # 1000 tokens in 60s = 1000 tpm
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 600 400
+  add_message 10 0 0 1000 1000
+  run run_tpm
   [[ "$output" == *$'\033[93m'"ϟ"* ]]
 }
 
 @test "bolt: orange at 5000 tpm" {
-  # 5000 tokens in 60s = 5000 tpm
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 3000 2000
+  add_message 10 0 0 1000 5000
+  run run_tpm
   [[ "$output" == *$'\033[38;5;209m'"ϟ"* ]]
 }
 
 @test "bolt: red at 10000 tpm" {
-  # 10000 tokens in 60s = 10000 tpm
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 6000 4000
+  add_message 10 0 0 1000 10000
+  run run_tpm
   [[ "$output" == *$'\033[91m'"ϟ"* ]]
 }
 
 @test "bolt: violet at 20000 tpm" {
-  # 20000 tokens in 60s = 20000 tpm
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 12000 8000
+  add_message 10 0 0 1000 20000
+  run run_tpm
   [[ "$output" == *$'\033[38;5;57m'"ϟ"* ]]
 }
 
 @test "bolt: hot pink at 1M tpm" {
-  # 1500000 tokens in 60s = 1500000 tpm
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 1000000 500000
+  add_message 10 0 0 1000 1500000
+  run run_tpm
   [[ "$output" == *$'\033[38;5;198m'"ϟ"* ]]
-}
-
-# ─── TPM sliding window ───
-
-@test "tpm: first invocation uses full-session average" {
-  # 8000 tokens in 60s = 8000 tpm
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000
-  [[ "$(plain)" == *"8.0k tpm"* ]]
-}
-
-@test "tpm: sliding window overrides average on second call" {
-  # Call 1: 8000 tokens at t=60s
-  invoke "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000
-  # Call 2: 9000 tokens at t=120s -> window: 1000 tok / 60s = 1000 tpm
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 120000 5500 3500
-  [[ "$(plain)" == *"1.0k tpm"* ]]
-}
-
-@test "tpm: session restart hides segment when token delta is negative" {
-  # Prior session ended with 80000 tokens at t=120s
-  invoke "Opus 4.6" 25 "$TEST_SID" 120000 50000 30000
-  # Resumed session reports fewer total tokens (e.g. context trim).
-  # Without the mitigation this would display the spurious full-session
-  # average (1000 tok / 5s = 12000 tpm). Sentinel keeps the segment hidden.
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 5000 600 400
-  [[ "$(plain)" != *"tpm"* ]]
-}
-
-@test "tpm: session restart recovers post-resume rate via synthetic baseline" {
-  # Prior session ended with 50000 tokens at t=600s
-  invoke "Opus 4.6" 25 "$TEST_SID" 600000 30000 20000
-  # Resumed session: 5000 new tokens in 10s of post-resume time.
-  # Baseline (0, 50000) + current (10000, 55000) -> window_tpm = 5000*60/10 = 30000
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 10000 35000 20000
-  [[ "$(plain)" == *"30.0k tpm"* ]]
-}
-
-@test "tpm: sentinel clears once a positive window_tpm is produced" {
-  # Pre-resume: 80000 tokens. Resume with 1000 tokens (trim case) -> truncate, sentinel set.
-  invoke "Opus 4.6" 25 "$TEST_SID" 120000 50000 30000
-  invoke "Opus 4.6" 25 "$TEST_SID" 5000 600 400          # state: 5000 1000, sentinel set
-  # Continued post-resume activity produces a positive delta -> sentinel clears.
-  # delta = 2000-1000 = 1000 tokens over 60000ms = 1000 tpm
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 65000 1200 800
-  [[ "$(plain)" == *"1.0k tpm"* ]]
-}
-
-@test "tpm: session restart with zero prior tokens hides segment" {
-  # Prior session recorded a zero-token sample. prev_tok=0 -> truncate path, sentinel set.
-  invoke "Opus 4.6" 25 "$TEST_SID" 60000 0 0
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 5000 600 400
-  [[ "$(plain)" != *"tpm"* ]]
-}
-
-@test "tpm: orphaned sentinel is cleared when state file is missing" {
-  # Simulate /tmp eviction: sentinel exists but state file does not.
-  : > "/tmp/claude-code-statusline-tpm-${TEST_SID}.restart"
-  rm -f "/tmp/claude-code-statusline-tpm-${TEST_SID}"
-  # First invocation should clear the orphaned sentinel and display normally.
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000
-  [[ "$(plain)" == *"8.0k tpm"* ]]
 }
