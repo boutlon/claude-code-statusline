@@ -170,8 +170,10 @@ if ! hidden tpm && [ -n "$transcript_path" ] && [ "$duration_ms" -gt 0 ] 2>/dev/
   [ "$duration_ms" -lt "$lookback_ms" ] && lookback_ms=$duration_ms
   window_ms=$lookback_ms
   [ "$window_ms" -lt "$TPM_WINDOW_MIN_MS" ] && window_ms=$TPM_WINDOW_MIN_MS
+  # BSD find documents rounding file age up to whole minutes, so look one
+  # minute past the window; the timestamp cutoff below enforces the edge.
   window_files=$(find "$transcript_path" "${transcript_path%.jsonl}/subagents" \
-    -maxdepth 1 -name '*.jsonl' -mmin "-$((TPM_WINDOW_MS / 60000))" 2>/dev/null)
+    -maxdepth 1 -name '*.jsonl' -mmin "-$((TPM_WINDOW_MS / 60000 + 1))" 2>/dev/null)
   cutoff_s=$(( $(date +%s) - lookback_ms / 1000 ))
   # BSD date takes -r <epoch>, GNU date takes -d @<epoch>
   cutoff=$(date -u -r "$cutoff_s" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \

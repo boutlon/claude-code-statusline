@@ -192,6 +192,16 @@ load 'helpers'
   [[ "$(plain)" == *"3.0k tpm"* ]]
 }
 
+@test "tpm: a transcript last written late in the window still counts" {
+  # BSD find documents rounding file age up to whole minutes; a file 4.5
+  # minutes old must not be prefiltered out of the 5-minute window
+  add_message 270 0 0 0 3000
+  touch -t "$(date -v-270S +%Y%m%d%H%M.%S 2>/dev/null || date -d '-270 seconds' +%Y%m%d%H%M.%S)" "$(transcript_path)"
+  run run_tpm 600000
+  # 3000 tokens over 5 minutes = 600 tpm
+  [[ "$(plain)" == *"ϟ 600 tpm"* ]]
+}
+
 @test "tpm: idle session shows nothing rather than a session average" {
   add_message 400 0 0 200000 5000
   run run_tpm 499000000
