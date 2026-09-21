@@ -1,15 +1,20 @@
 # Changelog
 
-## Unreleased
+## 1.7.0
+
+### Added
+
+- Show a prompt cache countdown on line 2: yellow from 10 minutes, orange under 5m, red under 2m, and `cache cold` in blue once it expires. Hidden while more than 10 minutes remain, and requires Claude Code 2.1.251 or later
+- Add `CLAUDE_STATUSLINE_HIDE` to hide any indicators from a comma-separated list: `branch`, `diff`, `model`, `context`, `tpm`, `cache`, `limits`
 
 ### Fixed
 
-- Compute TPM from the session transcript instead of the context-window snapshot, which measured context growth rather than throughput. Fixes the inflated rate in a new session's first minutes, the permanent non-zero rate on idle sessions, the stale rate after compaction, and the multi-million spike on resume once the `/tmp` state file was gone
-- Count only tokens added to the conversation plus output, so re-reading context or rewriting it after the cache goes cold no longer registers as throughput
+- Compute TPM from the session transcript instead of the context-window snapshot. Fixes the inflated rate early in a session, the stuck non-zero rate on idle sessions, the stale rate after compaction, and the multi-million spike on resume
+- Count only tokens added to the conversation plus output, so re-reading or rewriting context after the cache goes cold no longer counts as throughput
 
 ### Removed
 
-- The sliding-window and subagent state files in `/tmp` and the resume sentinel; the transcript is the only source
+- The sliding-window and subagent state files in `/tmp`, and the resume sentinel; the transcript is now the only source
 
 ## 1.6.0
 
