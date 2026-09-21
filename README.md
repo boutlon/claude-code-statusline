@@ -7,7 +7,6 @@
 A minimal Claude Code statusline showing branch, diff, model, context, throughput, rate limit usage, and prompt cache state.
 
 <img width="685" alt="A calm session: branch, diff, model, context, throughput" src="screenshots/default.png" />
-<img width="685" alt="Every indicator at once, including rate limits and prompt cache" src="screenshots/everything.png" />
 
 ## Design principles
 
@@ -29,6 +28,10 @@ A minimal Claude Code statusline showing branch, diff, model, context, throughpu
 | **Prompt cache** | Countdown to the cached prefix going cold, then `cache cold` until the next response warms it. Shown only in the last 10 minutes or once cold. Hidden means warm with time to spare | Yellow 10m, orange 5m, red 2m, blue when cold |
 
 Indicators without data are hidden rather than shown empty.
+
+<img width="685" alt="Every indicator at once" src="screenshots/everything.png" />
+
+*Every indicator at once: context near compaction, throughput in the top tier, both rate limit windows on pace, and the prompt cache about to go cold.*
 
 
 ## Install
