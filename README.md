@@ -6,29 +6,32 @@
 
 A minimal Claude Code statusline showing branch, diff, model, context, throughput, rate limit usage, and prompt cache state.
 
-<img width="1370" height="200" alt="default" src="https://github.com/user-attachments/assets/3a5693da-9740-4e9d-bb6c-bc9f86a501a1" />
-<img width="1370" height="236" alt="everything" src="https://github.com/user-attachments/assets/4bffcd1e-46bc-45b9-8812-3a71ea5c36b0" />
+<img width="685" alt="A calm session: branch, diff, model, context, throughput" src="screenshots/default.png" />
 
 ## Design principles
 
-- **Essential** – relevant indicators shown without extra labels, dividers, or empty states
-- **Quiet** – supporting the main action, not competing with it
-- **Terminal-first** – plain text symbols, no emojis
+- **Essential**: relevant indicators shown without extra labels, dividers, or empty states
+- **Quiet**: supporting the main action, not competing with it
+- **Terminal-first**: plain text symbols, no emojis
 
 
 ## What it shows
 
-|   |   |   |
+| Indicator | Description | Thresholds |
 |---|---|---|
 | **Branch** | Current git branch |  |
 | **Diff** | Uncommitted additions and deletions |  |
 | **Model** | Active Claude model |  |
 | **Context** | Usage bar and percentage, scaled so 100% matches the actual autocompact point | Grey <35%, yellow-green 35%, yellow 50%, orange 75%, red 90% |
 | **Throughput** | Tokens per minute | Grey <1k, yellow 1k, orange 5k, red 10k, violet 20k |
-| **Rate limits** | 5-hour and 7-day usage with countdown. Shown on first use, when on pace to hit the limit, and at or above 75%. Hidden means comfortable pace | Grey <50%, yellow 50%, orange 75%, red 90% |
-| **Prompt cache** | Countdown to the cached prefix going cold, then `cache cold` until the next response warms it. Shown only in the last 10 minutes or once cold. Hidden means warm with time to spare | Yellow 10m, orange 5m, red 2m, blue when cold |
+| **Rate limits** | 5-hour and 7-day usage with a countdown to reset. Hidden while on a comfortable pace | Shown on first use, when on pace to hit the limit, and at 75% and above. Grey <50%, yellow 50%, orange 75%, red 90% |
+| **Prompt cache** | Countdown to the cached prefix going cold, then `cache cold` until the next response warms it. Hidden while warm with time to spare | Shown in the last 10 minutes and once cold. Yellow 10m, orange 5m, red 2m, blue when cold |
 
 Indicators without data are hidden rather than shown empty.
+
+<img width="685" alt="Every indicator at once" src="screenshots/everything.png" />
+
+*Every indicator at once: context near compaction, throughput in the top tier, both rate limit windows on pace, and the prompt cache about to go cold.*
 
 
 ## Install
@@ -53,7 +56,7 @@ Or clone and symlink: `git clone https://github.com/levibe/claude-code-statuslin
 }
 ```
 
-`refreshInterval` re-runs the script every 30 seconds while the session is idle so the prompt cache countdown keeps ticking. Without it the segment still updates on every event and still flips to cold at the right moment, it just stays fixed between events.
+`refreshInterval` re-runs the script every 30 seconds while the session is idle so the prompt cache countdown keeps ticking. Without it, the countdown still updates on every event and still flips to cold on time. It just stays fixed between events.
 
 3. Restart Claude Code.
 
@@ -88,8 +91,8 @@ Unknown names are ignored. A hidden indicator also skips the work behind it, so 
 
 ## Requirements
 
-- [`jq`](https://jqlang.github.io/jq/) – JSON parsing
-- `git` – branch and diff information
+- [`jq`](https://jqlang.github.io/jq/): JSON parsing
+- `git`: branch and diff information
 
 `brew install jq git` or `apt install jq git`
 
@@ -103,7 +106,7 @@ Unknown names are ignored. A hidden indicator also skips the work behind it, so 
 - Marks a linked git worktree with a distinct icon and color, separating it from the main checkout
 - Computes prompt cache warmth from `expires_at` against the clock rather than trusting the `warm` flag, which can lag when Claude Code re-runs the script at the moment of expiry (requires Claude Code 2.1.251 or later for `prompt_cache`)
 - Uses `--no-optional-locks` on all git calls to prevent lock contention
-- Fixes model name bleeding across sessions ([CC bug](https://github.com/anthropics/claude-code/issues/19570))
+- Fixes model name bleeding across sessions ([Claude Code bug](https://github.com/anthropics/claude-code/issues/19570))
 - Validates model names to filter garbled input from Claude Code
 
 
@@ -120,6 +123,15 @@ Run the test suite:
 brew install bats-core  # https://bats-core.readthedocs.io/en/stable/installation.html
 bats test/
 ```
+
+Regenerate the README screenshots (needs Chrome or Chromium; set `CHROME=` to point at one if it isn't found):
+
+```bash
+screenshots/generate.sh            # all cases
+screenshots/generate.sh default    # one case
+```
+
+Each case in `screenshots/generate.sh` feeds a hand-built payload to `statusline.sh` and renders the output in the style of Claude Code in Cursor's terminal.
 
 
 ## Contributing
