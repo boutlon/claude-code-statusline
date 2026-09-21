@@ -165,6 +165,14 @@ load 'helpers'
   [[ "$(plain)" == *"⧉ wt-alpha naïve-fea…anch-name"* ]]
 }
 
+@test "git: multibyte branch truncates on character boundaries in the C locale" {
+  make_git_repo
+  # ï sits at character 9, so a byte-counting cut lands inside it
+  make_worktree wt-alpha -b abcdefghïjklmnopqrstuvwx
+  LC_ALL=C run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ wt-alpha abcdefghï…pqrstuvwx"* ]]
+}
+
 @test "git: 19-char branch renders in full alongside the worktree name" {
   make_git_repo
   make_worktree wt-alpha -b abcdefghijklmnopqrs

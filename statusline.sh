@@ -368,11 +368,15 @@ if [ -n "$cwd" ] && { ! hidden branch || ! hidden diff; }; then
         fi
         # Genuinely different names render as a pair; middle-truncate the
         # trailing branch so the pair can't blow out the line. 9 chars kept per
-        # side so a full ticket id (PRO-14555) survives the cut. In UTF-8
-        # locales sed counts characters, not bytes, so multibyte names truncate
-        # cleanly; names of 19 chars or fewer don't match and pass through.
+        # side so a full ticket id (PRO-14555) survives the cut; names of 19
+        # chars or fewer don't match and pass through. sed's `.` is a byte in
+        # the C locale (what we get when Claude Code starts without LANG), which
+        # would split a multibyte character. So pin the C locale and spell out
+        # a UTF-8 character ourselves: one non-continuation byte followed by
+        # its continuation bytes (octal 200-277).
         if [ -n "$worktree_name" ]; then
-          branch_display=$(printf '%s' "$branch" | sed -E 's/^(.{9}).{2,}(.{9})$/\1…\2/')
+          utf8_char=$(printf '[^\200-\277][\200-\277]*')
+          branch_display=$(printf '%s' "$branch" | LC_ALL=C sed -E "s/^((${utf8_char}){9})(${utf8_char}){2,}((${utf8_char}){9})\$/\\1…\\4/")
         fi
       fi
     fi
