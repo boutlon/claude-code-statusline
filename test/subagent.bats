@@ -9,9 +9,9 @@ subagent_file() {
 }
 
 @test "subagent: work is added to the main transcript's" {
-  add_message 10 0 0 0 500
-  add_message 10 0 0 0 100 msg_a1 "$(subagent_file 1)"
-  add_message 10 0 0 0 100 msg_b1 "$(subagent_file 2)"
+  add_message 10 0 0 1000 500
+  add_message 10 0 0 1000 100 msg_a1 "$(subagent_file 1)"
+  add_message 10 0 0 1000 100 msg_b1 "$(subagent_file 2)"
   run run_tpm
   [[ "$(plain)" == *"ϟ 700 tpm"* ]]
 }
@@ -29,15 +29,15 @@ subagent_file() {
 }
 
 @test "subagent: messages outside the window are ignored" {
-  add_message 10 0 0 0 500
+  add_message 10 0 0 1000 500
   add_message 400 0 0 100000 50000 msg_old "$(subagent_file 1)"
   run run_tpm 600000
   [[ "$(plain)" == *"ϟ 100 tpm"* ]]
 }
 
 @test "subagent: transcripts count even when the main transcript is quiet" {
-  add_message 400 0 0 0 500
-  add_message 10 0 0 0 150 msg_a1 "$(subagent_file 1)"
+  add_message 400 0 0 1000 500
+  add_message 10 0 0 1000 150 msg_a1 "$(subagent_file 1)"
   run run_tpm 600000
   [[ "$(plain)" == *"ϟ 30 tpm"* ]]
 }

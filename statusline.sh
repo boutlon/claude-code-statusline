@@ -146,7 +146,11 @@ trap 'rm -f "$untracked_list"' EXIT
 # moves tokens between usage columns without growing the context, so it
 # doesn't register; line 2 already shows the cache going cold. A shrink
 # (compaction) counts as zero, and the first message in a file has nothing
-# to diff against, so only its output counts. Streaming repeats a message id
+# to diff against, so only its output counts. Claude Code also writes
+# synthetic assistant entries after API errors, with an id and timestamp but
+# no usage; anything with no input context is dropped so it can't become a
+# zero baseline that makes the next real response look like all new work.
+# Streaming repeats a message id
 # once per content block with a growing output count, so each id is taken
 # at its largest output. Subagent transcripts are summed the same way.
 #
@@ -195,7 +199,8 @@ if ! hidden tpm && [ -n "$transcript_path" ] && [ "$duration_ms" -gt 0 ] 2>/dev/
             | { id: $m.id, ts: .timestamp,
                 ctx: (($m.usage.input_tokens // 0) + ($m.usage.cache_creation_input_tokens // 0)
                       + ($m.usage.cache_read_input_tokens // 0)),
-                out: ($m.usage.output_tokens // 0) } ]
+                out: ($m.usage.output_tokens // 0) }
+            | select(.ctx > 0) ]
           | group_by(.id) | map(max_by(.out)) | sort_by(.ts)
           | [ range(length) as $i | .[$i] + { prev: (if $i > 0 then .[$i - 1] else null end) } ]
           | map(select(.ts >= $cutoff)
