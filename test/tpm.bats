@@ -4,8 +4,9 @@ load 'helpers'
 
 # add_message args: age_seconds input cache_creation cache_read output [id] [file]
 # A message's work is its context growth over the previous message in the
-# same file (context = input + cache_creation + cache_read) plus its output.
-# The first message in a file has nothing to diff against, so only its output
+# same file (context = input + cache_creation + cache_read), less the previous
+# message's output (which joins the next context), plus its own output. The
+# first message in a file has nothing to diff against, so only its output
 # counts. With a 60s session the window equals the session, so tpm == tokens.
 
 # ─── TPM calculation ───
@@ -65,10 +66,11 @@ load 'helpers'
 @test "tpm: counts context growth plus output, not context size" {
   # First message: 50k context, only its 100 output counts
   add_message 20 2 50000 0 100
-  # Second: context 53034 (+3034 over the first) plus 200 output
+  # Second: context 53034, +3034 over the first, of which 100 is the first's
+  # output; 2932 new plus 200 output
   add_message 10 32 3000 50002 200
   run run_tpm
-  [[ "$(plain)" == *"3.3k tpm"* ]]
+  [[ "$(plain)" == *"3.2k tpm"* ]]
 }
 
 @test "tpm: rewriting a cold cache is not new work" {
@@ -77,7 +79,8 @@ load 'helpers'
   add_message 20 2 0 100000 100
   add_message 10 2 100500 0 100
   run run_tpm
-  [[ "$(plain)" == *"ϟ 700 tpm"* ]]
+  # 100 + (400 new + 100 output)
+  [[ "$(plain)" == *"ϟ 600 tpm"* ]]
 }
 
 @test "tpm: a shrinking context (compaction) counts as zero growth" {
@@ -87,13 +90,21 @@ load 'helpers'
   [[ "$(plain)" == *"ϟ 200 tpm"* ]]
 }
 
+@test "tpm: previous output entering the next context is not counted twice" {
+  add_message 20 0 0 1000 1000
+  # Context grew by exactly the previous output: no new input
+  add_message 10 0 1000 1000 100
+  run run_tpm
+  [[ "$(plain)" == *"1.1k tpm"* ]]
+}
+
 @test "tpm: growth is measured against the last message even outside the window" {
   # The old message's own tokens don't count, but it is the baseline
-  add_message 400 0 0 10000 999999
+  add_message 400 0 0 10000 300
   add_message 10 0 500 10000 100
   run run_tpm 600000
-  # 600 tokens over a full 5-minute window = 120 tpm
-  [[ "$(plain)" == *"ϟ 120 tpm"* ]]
+  # (500 - 300) + 100 = 300 tokens over a full 5-minute window = 60 tpm
+  [[ "$(plain)" == *"ϟ 60 tpm"* ]]
 }
 
 @test "tpm: streamed blocks with the same message id count once, at their final output" {
@@ -106,11 +117,12 @@ load 'helpers'
 }
 
 @test "tpm: sums every message inside the window" {
+  # 100, then (300 - 100) + 100, then (300 - 100) + 100
   add_message 50 0 0 1000 100
-  add_message 30 0 100 1000 100
-  add_message 10 0 100 1100 100
+  add_message 30 0 300 1000 100
+  add_message 10 0 300 1300 100
   run run_tpm
-  [[ "$(plain)" == *"ϟ 500 tpm"* ]]
+  [[ "$(plain)" == *"ϟ 700 tpm"* ]]
 }
 
 @test "tpm: skips lines that are not assistant messages or not valid JSON" {
@@ -158,14 +170,15 @@ load 'helpers'
 
 @test "tpm: resumed session ignores messages from before the process started" {
   # 60k tokens two minutes ago belong to the previous process (session is 90s old)
-  add_message 120 0 0 60000 20000
+  add_message 120 0 0 60000 1000
   run run_tpm 90000
   [[ "$(plain)" != *"tpm"* ]]
-  # First post-resume response: growth over the pre-resume message plus output
+  # First post-resume response: growth over the pre-resume message (less its
+  # output) plus own output
   add_message 10 0 3000 60000 500
   run run_tpm 90000
-  # 3500 tokens over 90s = 2333 tpm
-  [[ "$(plain)" == *"2.3k tpm"* ]]
+  # (3000 - 1000) + 500 = 2500 tokens over 90s = 1666 tpm
+  [[ "$(plain)" == *"1.6k tpm"* ]]
 }
 
 @test "tpm: floor widens the divisor but not the lookback after a resume" {

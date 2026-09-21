@@ -20,11 +20,12 @@ subagent_file() {
   # Main: 1000 -> 1500 context (+500) plus 100 output
   add_message 20 0 0 1000 0
   add_message 10 0 500 1000 100
-  # Agent: 100k context (first in file, output only) then +200 plus 50
+  # Agent: 100k context (first in file, output only) then +200 less the 50
+  # previous output, plus 50
   add_message 15 0 0 100000 50 msg_a1 "$(subagent_file 1)"
   add_message 10 0 200 100000 50 msg_a2 "$(subagent_file 1)"
   run run_tpm
-  [[ "$(plain)" == *"ϟ 900 tpm"* ]]
+  [[ "$(plain)" == *"ϟ 850 tpm"* ]]
 }
 
 @test "subagent: messages outside the window are ignored" {

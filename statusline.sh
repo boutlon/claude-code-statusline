@@ -140,9 +140,11 @@ trap 'rm -f "$untracked_list"' EXIT
 # cache writes, and cache reads is the size of the context that call saw.
 # A message's work is how much that context grew over the previous message
 # in the same file (the new tool results and user text) plus its output.
-# Re-reading existing context, or rewriting it to cache after the cache went
-# cold, moves tokens between usage columns without growing the context, so
-# it doesn't register; line 2 already shows the cache going cold. A shrink
+# The previous output is part of that growth, since it joins the context for
+# the next call, so it is subtracted rather than counted twice. Re-reading
+# existing context, or rewriting it to cache after the cache went cold,
+# moves tokens between usage columns without growing the context, so it
+# doesn't register; line 2 already shows the cache going cold. A shrink
 # (compaction) counts as zero, and the first message in a file has nothing
 # to diff against, so only its output counts. Streaming repeats a message id
 # once per content block with a growing output count, so each id is taken
@@ -193,9 +195,10 @@ if ! hidden tpm && [ -n "$transcript_path" ] && [ "$duration_ms" -gt 0 ] 2>/dev/
                       + ($m.usage.cache_read_input_tokens // 0)),
                 out: ($m.usage.output_tokens // 0) } ]
           | group_by(.id) | map(max_by(.out)) | sort_by(.ts)
-          | [ range(length) as $i | .[$i] + { prev: (if $i > 0 then .[$i - 1].ctx else null end) } ]
+          | [ range(length) as $i | .[$i] + { prev: (if $i > 0 then .[$i - 1] else null end) } ]
           | map(select(.ts >= $cutoff)
-                | .out + (if .prev == null then 0 else ([.ctx - .prev, 0] | max) end))
+                | .out + (if .prev == null then 0
+                          else ([.ctx - .prev.ctx - .prev.out, 0] | max) end))
           | add // 0
         ' 2>/dev/null
       done | awk '{ s += $1 } END { print s + 0 }')
