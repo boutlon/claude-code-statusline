@@ -43,25 +43,34 @@ run_cache() {
 
 @test "cache: line 2 holds only the cache segment when rate limits are hidden" {
   now=$(date +%s)
-  run run_cache true $((now + 480))
+  # Mid-minute so a one-second tick between this clock and the script's still floors to 8m
+  run run_cache true $((now + 510))
   [ "$status" -eq 0 ]
   [ "$(plain | sed -n '2p')" = "cache 8m" ]
 }
 
 @test "cache: rendered after rate limits with the standard separator" {
   now=$(date +%s)
-  run run_cache true $((now + 480)) 80 $((now + 3600))
+  run run_cache true $((now + 510)) 80 $((now + 3600))
   [ "$status" -eq 0 ]
   [[ "$(plain | sed -n '2p')" == "5h 80% "*"  cache 8m" ]]
 }
 
 # ─── Countdown tiers ───
 
-@test "cache: yellow from 10m down" {
+@test "cache: yellow at the 10m threshold" {
   now=$(date +%s)
+  # 600s reads 10m, or 9m if a second ticks before the script runs; either is yellow
   run run_cache true $((now + 600))
   [ "$status" -eq 0 ]
-  [[ "$output" == *$'\033[93m'"cache 10m"* ]]
+  [[ "$output" == *$'\033[93m'"cache "* ]]
+}
+
+@test "cache: yellow inside 10m" {
+  now=$(date +%s)
+  run run_cache true $((now + 570))
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'\033[93m'"cache 9m"* ]]
 }
 
 @test "cache: orange under 5m" {
