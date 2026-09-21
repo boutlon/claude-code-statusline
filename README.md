@@ -6,8 +6,8 @@
 
 A minimal Claude Code statusline showing branch, diff, model, context, throughput, rate limit usage, and prompt cache state.
 
-<img width="1370" height="200" alt="default" src="https://github.com/user-attachments/assets/3a5693da-9740-4e9d-bb6c-bc9f86a501a1" />
-<img width="1370" height="236" alt="everything" src="https://github.com/user-attachments/assets/4bffcd1e-46bc-45b9-8812-3a71ea5c36b0" />
+<img width="685" alt="A calm session: branch, diff, model, context, throughput" src="screenshots/default.png" />
+<img width="685" alt="Every indicator at once, including rate limits and prompt cache" src="screenshots/everything.png" />
 
 ## Design principles
 
@@ -120,6 +120,15 @@ Run the test suite:
 brew install bats-core  # https://bats-core.readthedocs.io/en/stable/installation.html
 bats test/
 ```
+
+Regenerate the README screenshots (needs Chrome or Chromium; set `CHROME=` to point at one if it isn't found):
+
+```bash
+screenshots/generate.sh            # all cases
+screenshots/generate.sh default    # one case
+```
+
+Each case in `screenshots/generate.sh` feeds a hand-built payload to `statusline.sh` and renders the output in the style of Claude Code in Cursor's terminal.
 
 
 ## Contributing
