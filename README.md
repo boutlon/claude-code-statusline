@@ -71,9 +71,14 @@ Or add it to the `env` block in the same file, which the statusline inherits.
 
 | Name | Hides |
 |---|---|
+| `branch` | Branch name and worktree marker |
+| `diff` | Uncommitted additions and deletions |
+| `model` | Model name and 1M marker |
+| `context` | Context usage bar and percentage |
 | `tpm` | Throughput (tokens per minute) |
+| `limits` | 5-hour and 7-day rate limits |
 
-Unknown names are ignored.
+Unknown names are ignored. A hidden indicator also skips the work behind it, so hiding `diff` avoids the git diff scan and hiding `tpm` avoids the sliding-window bookkeeping.
 
 
 ## Requirements
