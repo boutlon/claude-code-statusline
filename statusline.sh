@@ -129,6 +129,17 @@ hidden() {
   return 1
 }
 
+# Middle-truncate $1 past 19 characters, keeping 9 per side so a full ticket
+# id (PRO-14555) survives the cut; 19 or fewer pass through untouched. sed's
+# `.` is a byte in the C locale (what we get when Claude Code starts without
+# LANG), which would split a multibyte character. So pin the C locale and
+# spell out a UTF-8 character ourselves: one non-continuation byte followed
+# by its continuation bytes (octal 200-277).
+middle_truncate() {
+  utf8_char=$(printf '[^\200-\277][\200-\277]*')
+  printf '%s' "$1" | LC_ALL=C sed -E "s/^((${utf8_char}){9})(${utf8_char}){2,}((${utf8_char}){9})\$/\\1…\\4/"
+}
+
 # Temp file cleanup (set once, covers all temp files created below)
 untracked_list=""
 trap 'rm -f "$untracked_list"' EXIT
@@ -324,6 +335,7 @@ sep="  "
 branch=""
 diff_stat=""
 worktree_name=""          # worktree folder name, only when it differs from the branch
+worktree_display=""       # worktree name as rendered beside the branch (may be truncated)
 branch_display=""         # branch as rendered beside the worktree name (may be truncated)
 branch_glyph="⌥"          # main checkout
 branch_color="\033[36m"   # cyan
@@ -356,27 +368,20 @@ if [ -n "$cwd" ] && { ! hidden branch || ! hidden diff; }; then
         # so we don't render "feature feature".
         worktree_name=$(printf '%s\n' "$gitpaths" | sed -n '3p')
         worktree_name=${worktree_name##*/}
-        # Cosmetic differences also collapse to one name: folders are commonly
-        # the branch with slashes flattened to dashes (fix/tpm -> fix-tpm),
-        # optionally plus a numeric collision suffix (fix-tpm-2). Suffix is
-        # capped at two digits so a meaningful name like release-2024 still
-        # counts as a real divergence.
+        # A folder that is just the branch with slashes flattened to dashes
+        # (fix/tpm -> fix-tpm) also collapses: it carries no information the
+        # branch doesn't. A collision suffix (fix-tpm-2) deliberately does not:
+        # it's the one thing that tells two worktrees on the same branch apart.
         norm_branch=$(printf '%s' "$branch" | tr '/' '-')
-        norm_wt=$(printf '%s' "$worktree_name" | sed -E 's/-[0-9]{1,2}$//')
-        if [ "$worktree_name" = "$norm_branch" ] || [ "$norm_wt" = "$norm_branch" ]; then
+        if [ "$worktree_name" = "$norm_branch" ]; then
           worktree_name=""
         fi
-        # Genuinely different names render as a pair; middle-truncate the
-        # trailing branch so the pair can't blow out the line. 9 chars kept per
-        # side so a full ticket id (PRO-14555) survives the cut; names of 19
-        # chars or fewer don't match and pass through. sed's `.` is a byte in
-        # the C locale (what we get when Claude Code starts without LANG), which
-        # would split a multibyte character. So pin the C locale and spell out
-        # a UTF-8 character ourselves: one non-continuation byte followed by
-        # its continuation bytes (octal 200-277).
+        # Different names render as a pair; middle-truncate both so the pair
+        # can't blow out the line. The tail is kept, so a collision suffix
+        # survives the cut.
         if [ -n "$worktree_name" ]; then
-          utf8_char=$(printf '[^\200-\277][\200-\277]*')
-          branch_display=$(printf '%s' "$branch" | LC_ALL=C sed -E "s/^((${utf8_char}){9})(${utf8_char}){2,}((${utf8_char}){9})\$/\\1…\\4/")
+          worktree_display=$(middle_truncate "$worktree_name")
+          branch_display=$(middle_truncate "$branch")
         fi
       fi
     fi
@@ -534,10 +539,11 @@ emit() {
 }
 
 if ! hidden branch && [ -n "$branch" ]; then
-  # Worktree name (always mauve here) leads when present; branch trails dimmed
-  emit "${branch_color}${branch_glyph} %s${reset}" "${worktree_name:-$branch}"
   if [ -n "$worktree_name" ]; then
-    printf " ${dim}%s${reset}" "${branch_display:-$branch}"
+    # Worktree name (always mauve here) leads; branch trails dimmed
+    emit "${branch_color}${branch_glyph} %s${reset} ${dim}%s${reset}" "$worktree_display" "$branch_display"
+  else
+    emit "${branch_color}${branch_glyph} %s${reset}" "$branch"
   fi
 fi
 if [ -n "$diff_stat" ]; then

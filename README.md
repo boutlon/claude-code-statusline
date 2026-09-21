@@ -103,7 +103,7 @@ Unknown names are ignored. A hidden indicator also skips the work behind it, so 
 - Caps line counting at 10k to avoid slowdowns on large diffs
 - Throughput counts tokens added to the conversation plus model output over the last 5 minutes of the transcript, subagents included; re-reading or re-caching existing context is not new work and does not count
 - Shows short SHA on detached HEAD; falls back to symbolic ref in empty repos
-- Marks a linked git worktree with a distinct icon and color, separating it from the main checkout; shows the worktree's folder name when it genuinely differs from the branch (flattened slashes and numeric collision suffixes don't count), with the branch middle-truncated to keep the line short
+- Marks a linked git worktree with a distinct icon and color, separating it from the main checkout. When the worktree's folder name differs from its branch (flattened slashes don't count), both are shown, each middle-truncated past 19 characters
 - Computes prompt cache warmth from `expires_at` against the clock rather than trusting the `warm` flag, which can lag when Claude Code re-runs the script at the moment of expiry (requires Claude Code 2.1.251 or later for `prompt_cache`)
 - Uses `--no-optional-locks` on all git calls to prevent lock contention
 - Fixes model name bleeding across sessions ([Claude Code bug](https://github.com/anthropics/claude-code/issues/19570))

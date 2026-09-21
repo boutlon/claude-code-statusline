@@ -112,27 +112,18 @@ load 'helpers'
   [[ "$(plain)" != *"feature-foo"* ]]
 }
 
-@test "git: numeric collision suffix on the folder is not a divergence" {
+@test "git: collision suffix on the folder is shown, so same-branch worktrees stay distinct" {
   make_git_repo
   make_worktree feature-2 -b feature
   run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
-  [[ "$(plain)" == *"⧉ feature"* ]]
-  [[ "$(plain)" != *"feature-2"* ]]
+  [[ "$(plain)" == *"⧉ feature-2 feature"* ]]
 }
 
-@test "git: collision suffix plus flattened slashes still collapses to the branch" {
+@test "git: collision suffix plus flattened slashes still shows both names" {
   make_git_repo
   make_worktree fix-tpm-2 -b fix/tpm
   run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
-  [[ "$(plain)" == *"⧉ fix/tpm"* ]]
-  [[ "$(plain)" != *"fix-tpm-2"* ]]
-}
-
-@test "git: a long numeric suffix is a real name, not a collision suffix" {
-  make_git_repo
-  make_worktree release-2024 -b release
-  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
-  [[ "$(plain)" == *"⧉ release-2024 release"* ]]
+  [[ "$(plain)" == *"⧉ fix-tpm-2 fix/tpm"* ]]
 }
 
 @test "git: digit-ending branch matching its folder exactly is not shown twice" {
@@ -149,6 +140,13 @@ load 'helpers'
   run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
   [[ "$(plain)" == *"⧉ wt-alpha feature/v…anch-name"* ]]
   [[ "$(plain)" != *"very-long-branch-name"* ]]
+}
+
+@test "git: long worktree name is middle-truncated too, keeping its collision suffix" {
+  make_git_repo
+  make_worktree feature-very-long-branch-name-2 -b feature/very-long-branch-name
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ feature-v…ch-name-2 feature/v…anch-name"* ]]
 }
 
 @test "git: truncation keeps a leading ticket id intact" {
