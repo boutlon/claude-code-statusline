@@ -110,13 +110,22 @@ render() {
   name=$1; cwd=$2; sid="screenshot-$name"
   rm -f /tmp/claude-code-statusline-*-"$sid" /tmp/claude-code-statusline-*-"$sid".restart
 
+  # Throughput: the session is 60s old and the payload carries TPM tokens, so
+  # the segment reads exactly $TPM. The tokens are given both as payload totals
+  # and as one assistant message in a transcript, covering the script before
+  # and after it switched to reading the transcript.
+  transcript="$tmp/transcripts/$name.jsonl"
+  mkdir -p "$tmp/transcripts"
+  printf '{"type":"assistant","timestamp":"%s","message":{"id":"msg_%s","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":%s}}}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "$name" "$TPM" > "$transcript"
+
   now=$(date +%s)
   json=$(jq -n \
-    --arg cwd "$cwd" --arg sid "$sid" --arg model "$MODEL" \
+    --arg cwd "$cwd" --arg sid "$sid" --arg model "$MODEL" --arg transcript "$transcript" \
     --argjson used "$USED" --argjson ctx "$CTX" --argjson tpm "$TPM" --argjson now "$now" \
     --arg rl5 "$RL5" --arg rl5_in "$RL5_IN" --arg rl7 "$RL7" --arg rl7_in "$RL7_IN" \
     --arg cache "$CACHE" --arg cache_in "$CACHE_IN" '
-    { cwd: $cwd, session_id: $sid, model: { display_name: $model },
+    { cwd: $cwd, session_id: $sid, transcript_path: $transcript, model: { display_name: $model },
       context_window: { used_percentage: $used, context_window_size: $ctx,
                         total_input_tokens: $tpm, total_output_tokens: 0 },
       cost: { total_duration_ms: 60000 } }
