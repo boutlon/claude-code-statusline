@@ -4,7 +4,7 @@
 [![POSIX shell](https://img.shields.io/badge/Shell-POSIX-green.svg)](statusline.sh)
 [![macOS / Linux](https://img.shields.io/badge/macOS_|_Linux-compatible-lightgrey.svg)]()
 
-A minimal Claude Code statusline showing branch, diff, model, context, throughput, rate limit usage, and prompt cache state.
+A minimal, configurable Claude Code statusline showing branch, diff, model, context, throughput, rate limit usage, and prompt cache state.
 
 <img width="685" alt="A calm session: branch, diff, model, context, throughput" src="screenshots/default.png" />
 
@@ -27,11 +27,11 @@ A minimal Claude Code statusline showing branch, diff, model, context, throughpu
 | **Rate limits** | 5-hour and 7-day usage with a countdown to reset. Hidden while on a comfortable pace | Shown on first use, when on pace to hit the limit, and at 75% and above. Grey <50%, yellow 50%, orange 75%, red 90% |
 | **Prompt cache** | Countdown to the cached prefix going cold, then `cache cold` until the next response warms it. Hidden while warm with time to spare | Shown in the last 10 minutes and once cold. Yellow 10m, orange 5m, red 2m, blue when cold |
 
-Indicators without data are hidden rather than shown empty.
-
 <img width="685" alt="Every indicator at once" src="screenshots/everything.png" />
 
 *Every indicator at once: context near compaction, throughput in the top tier, both rate limit windows on pace, and the prompt cache about to go cold.*
+
+Indicators without data are hidden rather than shown empty, and any indicator can be turned off for good. See [Configuration](#configuration).
 
 
 ## Install
