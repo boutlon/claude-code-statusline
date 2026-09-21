@@ -6,8 +6,8 @@
 
 A minimal Claude Code statusline showing branch, diff, model, context, throughput, rate limit usage, and prompt cache state.
 
-<img width="685" height="100" alt="Screenshot" src="https://github.com/user-attachments/assets/5ce0a134-6b07-4754-8b9c-dca3e8fc6574" />
-
+<img width="1370" height="200" alt="default" src="https://github.com/user-attachments/assets/3a5693da-9740-4e9d-bb6c-bc9f86a501a1" />
+<img width="1370" height="236" alt="everything" src="https://github.com/user-attachments/assets/4bffcd1e-46bc-45b9-8812-3a71ea5c36b0" />
 
 ## Design principles
 
