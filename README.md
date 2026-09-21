@@ -17,7 +17,7 @@ A minimal Claude Code statusline showing branch, diff, model, context, throughpu
 
 ## What it shows
 
-|   |   |   |
+| Indicator | Description | Colors |
 |---|---|---|
 | **Branch** | Current git branch |  |
 | **Diff** | Uncommitted additions and deletions |  |

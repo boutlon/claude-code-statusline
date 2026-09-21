@@ -70,13 +70,15 @@ ansi_to_html() {
     }
     # Shade blocks become CSS-drawn cells (class b1..b4) so they match the
     # dot lattices xterm.js draws for them instead of a fallback font glyph.
+    # The UTF-8 bytes are written as octal escapes, which every POSIX awk
+    # accepts (mawk does not understand \x hex escapes).
     function span(text,  t) {
       if (text == "") return ""
       t = esc(text)
-      gsub("\xe2\x96\x91", "<i class=\"b1\"></i>", t)
-      gsub("\xe2\x96\x92", "<i class=\"b2\"></i>", t)
-      gsub("\xe2\x96\x93", "<i class=\"b3\"></i>", t)
-      gsub("\xe2\x96\x88", "<i class=\"b4\"></i>", t)
+      gsub("\342\226\221", "<i class=\"b1\"></i>", t)
+      gsub("\342\226\222", "<i class=\"b2\"></i>", t)
+      gsub("\342\226\223", "<i class=\"b3\"></i>", t)
+      gsub("\342\226\210", "<i class=\"b4\"></i>", t)
       return "<span style=\"color:" (fg == "" ? "#f0f0f0" : fg) (dim ? ";opacity:.5" : "") "\">" t "</span>"
     }
     {
