@@ -121,6 +121,16 @@ esac
 # Session-scoped state key (used by model cache and sliding window TPM)
 safe_id=$(printf '%s' "$session_id" | tr -dc 'a-zA-Z0-9_-')
 
+# Indicators to hide, from CLAUDE_STATUSLINE_HIDE: a comma-separated list of
+# names (branch, diff, model, context, tpm, limits, cache). Spaces are
+# tolerated and unknown names are ignored. A hidden indicator also skips the
+# work behind it.
+hide_list=",$(printf '%s' "${CLAUDE_STATUSLINE_HIDE:-}" | tr -d ' '),"
+hidden() {
+  case "$hide_list" in *,"$1",*) return 0 ;; esac
+  return 1
+}
+
 # Temp file cleanup (set once, covers all temp files created below)
 tmpfile=""
 untracked_list=""
@@ -129,9 +139,10 @@ trap 'rm -f "$tmpfile" "$untracked_list"' EXIT
 # Tokens per minute (full-session average as default)
 total_tokens=$((total_in + total_out))
 
-# Subagent tokens (mtime-cached to avoid re-parsing unchanged files)
+# Subagent tokens (mtime-cached to avoid re-parsing unchanged files).
+# Only feeds TPM, so skipped entirely when TPM is hidden.
 subagent_tokens=0
-if [ -n "$transcript_path" ] && [ -n "$safe_id" ]; then
+if ! hidden tpm && [ -n "$transcript_path" ] && [ -n "$safe_id" ]; then
   subagent_dir="${transcript_path%.jsonl}/subagents"
   if [ -d "$subagent_dir" ]; then
     subagent_cache="/tmp/${SUBAGENT_STATE_PREFIX}-${safe_id}"
@@ -159,7 +170,8 @@ fi
 subagent_tokens=${subagent_tokens:-0}
 [ "$subagent_tokens" -gt 0 ] 2>/dev/null && total_tokens=$((total_tokens + subagent_tokens))
 
-if [ "$duration_ms" -gt 0 ]; then
+# tpm=0 suppresses the segment, so a hidden indicator simply never computes it.
+if ! hidden tpm && [ "$duration_ms" -gt 0 ]; then
   tpm=$(( (total_tokens * 60000) / duration_ms ))
 else
   tpm=0
@@ -236,8 +248,9 @@ if [ "$effective_size" -gt 0 ] 2>/dev/null; then
   fi
 fi
 
-# Sliding window TPM (overrides full-session average when enough data)
-if [ -n "$safe_id" ]; then
+# Sliding window TPM (overrides full-session average when enough data).
+# Skipped when hidden so no state file is touched.
+if ! hidden tpm && [ -n "$safe_id" ]; then
   state_file="/tmp/${TPM_STATE_PREFIX}-${safe_id}"
   restart_sentinel="${state_file}.restart"
   # If the state file is missing (eviction or first run), clear any orphaned
@@ -337,12 +350,13 @@ dim="\033[38;5;247m"
 reset="\033[0m"
 sep="  "
 
-# Git branch + uncommitted diff stats (tracked + untracked)
+# Git branch + uncommitted diff stats (tracked + untracked).
+# Skipped entirely when both are hidden; the diff scan alone when only diff is.
 branch=""
 diff_stat=""
 branch_glyph="⌥"          # main checkout
 branch_color="\033[36m"   # cyan
-if [ -n "$cwd" ]; then
+if [ -n "$cwd" ] && { ! hidden branch || ! hidden diff; }; then
   branch=$(git --no-optional-locks -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)
   # Detached HEAD: show short SHA instead of literal "HEAD"
   [ "$branch" = "HEAD" ] && branch=$(git --no-optional-locks -C "$cwd" rev-parse --short HEAD 2>/dev/null)
@@ -357,64 +371,68 @@ if [ -n "$cwd" ]; then
     # (absolute) form; without it, from a subdir of the main checkout git prints
     # git-dir absolute but common-dir relative, so the string compare below would
     # false-positive a plain main checkout as a worktree.
-    gitdirs=$(git --no-optional-locks -C "$cwd" rev-parse --path-format=absolute --git-dir --git-common-dir 2>/dev/null)
-    gd=$(printf '%s\n' "$gitdirs" | sed -n '1p')
-    gcd=$(printf '%s\n' "$gitdirs" | sed -n '2p')
-    if [ -n "$gd" ] && [ "$gd" != "$gcd" ]; then
-      branch_glyph="⧉"                # worktree = a parallel copy of the repo
-      branch_color="\033[38;5;182m"   # light mauve, distinct from the cyan main checkout
-    fi
-    added=0
-    removed=0
-    # Tracked changes require at least one commit
-    if git --no-optional-locks -C "$cwd" rev-parse HEAD 2>/dev/null >/dev/null; then
-      # Tracked changes (text)
-      stat=$(git --no-optional-locks -C "$cwd" diff --shortstat HEAD 2>/dev/null)
-      added=$(echo "$stat" | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+')
-      removed=$(echo "$stat" | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+')
-      added=${added:-0}
-      removed=${removed:-0}
-      # Tracked binary changes: +1 per added/modified, -1 per deleted
-      bin_added=$(git --no-optional-locks -C "$cwd" diff --diff-filter=AM --numstat HEAD 2>/dev/null | grep -c '^-' || true)
-      bin_deleted=$(git --no-optional-locks -C "$cwd" diff --diff-filter=D --numstat HEAD 2>/dev/null | grep -c '^-' || true)
-      added=$((added + bin_added))
-      removed=$((removed + bin_deleted))
-    fi
-    # Untracked files: text lines + binary files counted as +1 each (cap at 10k)
-    untracked_lines=0
-    untracked_capped=0
-    untracked_list=$(mktemp)
-    git --no-optional-locks -C "$cwd" ls-files --others --exclude-standard -z 2>/dev/null > "$untracked_list"
-    total_untracked=$(tr -cd '\0' < "$untracked_list" | wc -c | tr -d ' ')
-    total_untracked=${total_untracked:-0}
-    if [ "$total_untracked" -gt 0 ] 2>/dev/null; then
-      # Text file lines
-      raw_count=$(xargs -0 grep -Ih '' < "$untracked_list" 2>/dev/null | head -n 10001 | wc -l | tr -d ' ')
-      raw_count=${raw_count:-0}
-      if [ "$raw_count" -gt 10000 ] 2>/dev/null; then
-        untracked_capped=1
-        untracked_lines=10000
-      else
-        untracked_lines=$raw_count
+    if ! hidden branch; then
+      gitdirs=$(git --no-optional-locks -C "$cwd" rev-parse --path-format=absolute --git-dir --git-common-dir 2>/dev/null)
+      gd=$(printf '%s\n' "$gitdirs" | sed -n '1p')
+      gcd=$(printf '%s\n' "$gitdirs" | sed -n '2p')
+      if [ -n "$gd" ] && [ "$gd" != "$gcd" ]; then
+        branch_glyph="⧉"                # worktree = a parallel copy of the repo
+        branch_color="\033[38;5;182m"   # light mauve, distinct from the cyan main checkout
       fi
-      # Binary files: count each as +1 (total minus text files)
-      text_files=$(xargs -0 grep -Il '' < "$untracked_list" 2>/dev/null | wc -l | tr -d ' ')
-      text_files=${text_files:-0}
-      binary_count=$((total_untracked - text_files))
-      [ "$binary_count" -gt 0 ] 2>/dev/null && untracked_lines=$((untracked_lines + binary_count))
     fi
-    rm -f "$untracked_list"
-    [ "$untracked_lines" -gt 0 ] 2>/dev/null && added=$((added + untracked_lines))
-    if [ "$added" -gt 0 ] || [ "$removed" -gt 0 ]; then
-      diff_stat="${sep}"
-      if [ "$untracked_capped" -eq 1 ]; then
-        diff_stat="${diff_stat}\033[93m⚠ +${added}${reset}"
-      elif [ "$added" -gt 0 ]; then
-        diff_stat="${diff_stat}\033[92m+${added}${reset}"
+    if ! hidden diff; then
+      added=0
+      removed=0
+      # Tracked changes require at least one commit
+      if git --no-optional-locks -C "$cwd" rev-parse HEAD 2>/dev/null >/dev/null; then
+        # Tracked changes (text)
+        stat=$(git --no-optional-locks -C "$cwd" diff --shortstat HEAD 2>/dev/null)
+        added=$(echo "$stat" | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+')
+        removed=$(echo "$stat" | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+')
+        added=${added:-0}
+        removed=${removed:-0}
+        # Tracked binary changes: +1 per added/modified, -1 per deleted
+        bin_added=$(git --no-optional-locks -C "$cwd" diff --diff-filter=AM --numstat HEAD 2>/dev/null | grep -c '^-' || true)
+        bin_deleted=$(git --no-optional-locks -C "$cwd" diff --diff-filter=D --numstat HEAD 2>/dev/null | grep -c '^-' || true)
+        added=$((added + bin_added))
+        removed=$((removed + bin_deleted))
       fi
-      if [ "$removed" -gt 0 ]; then
-        [ "$added" -gt 0 ] && diff_stat="${diff_stat} "
-        diff_stat="${diff_stat}\033[91m-${removed}${reset}"
+      # Untracked files: text lines + binary files counted as +1 each (cap at 10k)
+      untracked_lines=0
+      untracked_capped=0
+      untracked_list=$(mktemp)
+      git --no-optional-locks -C "$cwd" ls-files --others --exclude-standard -z 2>/dev/null > "$untracked_list"
+      total_untracked=$(tr -cd '\0' < "$untracked_list" | wc -c | tr -d ' ')
+      total_untracked=${total_untracked:-0}
+      if [ "$total_untracked" -gt 0 ] 2>/dev/null; then
+        # Text file lines
+        raw_count=$(xargs -0 grep -Ih '' < "$untracked_list" 2>/dev/null | head -n 10001 | wc -l | tr -d ' ')
+        raw_count=${raw_count:-0}
+        if [ "$raw_count" -gt 10000 ] 2>/dev/null; then
+          untracked_capped=1
+          untracked_lines=10000
+        else
+          untracked_lines=$raw_count
+        fi
+        # Binary files: count each as +1 (total minus text files)
+        text_files=$(xargs -0 grep -Il '' < "$untracked_list" 2>/dev/null | wc -l | tr -d ' ')
+        text_files=${text_files:-0}
+        binary_count=$((total_untracked - text_files))
+        [ "$binary_count" -gt 0 ] 2>/dev/null && untracked_lines=$((untracked_lines + binary_count))
+      fi
+      rm -f "$untracked_list"
+      [ "$untracked_lines" -gt 0 ] 2>/dev/null && added=$((added + untracked_lines))
+      if [ "$added" -gt 0 ] || [ "$removed" -gt 0 ]; then
+        diff_stat=""
+        if [ "$untracked_capped" -eq 1 ]; then
+          diff_stat="${diff_stat}\033[93m⚠ +${added}${reset}"
+        elif [ "$added" -gt 0 ]; then
+          diff_stat="${diff_stat}\033[92m+${added}${reset}"
+        fi
+        if [ "$removed" -gt 0 ]; then
+          [ "$added" -gt 0 ] && diff_stat="${diff_stat} "
+          diff_stat="${diff_stat}\033[91m-${removed}${reset}"
+        fi
       fi
     fi
   fi
@@ -428,7 +446,7 @@ rl_7d_pct_int=0
 remaining_5h=0
 remaining_7d=0
 
-if [ -n "$rl_5h_pct" ] || [ -n "$rl_7d_pct" ]; then
+if ! hidden limits && { [ -n "$rl_5h_pct" ] || [ -n "$rl_7d_pct" ]; }; then
   _now=$(date +%s)
 
   # First invocation of this session (show for USAGE_FIRST_WINDOW_S seconds)?
@@ -484,7 +502,7 @@ fi
 # cache reaches expires_at, but the payload it hands over may still say warm.
 # Hidden while comfortably warm (> CACHE_SHOW_S left) or when there is no data.
 cache_seg=""
-if [ -n "$cache_expires" ]; then
+if ! hidden cache && [ -n "$cache_expires" ]; then
   _now=${_now:-$(date +%s)}
   cache_left=$((cache_expires - _now))
   if [ "$cache_warm" != "true" ] || [ "$cache_left" -le 0 ]; then
@@ -508,16 +526,28 @@ fi
 
 # ─── Line 1: branch, diff, model, context, tpm ───
 
-if [ -n "$branch" ]; then
-  printf "${branch_color}${branch_glyph} %s${reset}" "$branch"
-  printf "%b" "$diff_stat"
-  printf "%s" "$sep"
+# emit FORMAT [ARG...]: print one segment, separated from the previous one
+line1_empty=1
+emit() {
+  if [ "$line1_empty" -eq 1 ]; then line1_empty=0; else printf '%s' "$sep"; fi
+  printf "$@"
+}
+
+if ! hidden branch && [ -n "$branch" ]; then
+  emit "${branch_color}${branch_glyph} %s${reset}" "$branch"
 fi
-printf "\033[38;5;252m✦ %s${reset}" "$model"
-if [ "$ctx_size" -ge 1000000 ] 2>/dev/null; then
-  printf " \033[38;5;252m1M${reset}"
+if [ -n "$diff_stat" ]; then
+  emit '%b' "$diff_stat"
 fi
-printf "${sep}${ctx_color}%s %s%%${reset}" "$bar" "$used"
+if ! hidden model; then
+  emit "\033[38;5;252m✦ %s${reset}" "$model"
+  if [ "$ctx_size" -ge 1000000 ] 2>/dev/null; then
+    printf " \033[38;5;252m1M${reset}"
+  fi
+fi
+if ! hidden context; then
+  emit "${ctx_color}%s %s%%${reset}" "$bar" "$used"
+fi
 if [ "$tpm" -gt 0 ]; then
   if [ "$tpm" -ge 100000000 ]; then
     tpm_display="$((tpm / 1000000))M"
@@ -543,13 +573,13 @@ if [ "$tpm" -gt 0 ]; then
   else
     bolt="ϟ"
   fi
-  printf "${sep}${dim}${bolt} %s tpm${reset}" "$tpm_display"
+  emit "${dim}${bolt} %s tpm${reset}" "$tpm_display"
 fi
 
 # ─── Line 2: rate limit usage, prompt cache ───
 
 if [ "$show_5h" -eq 1 ] || [ "$show_7d" -eq 1 ] || [ -n "$cache_seg" ]; then
-  printf '\n'
+  [ "$line1_empty" -eq 0 ] && printf '\n'
 
   if [ "$show_5h" -eq 1 ]; then
     rl_5h_color=$(usage_color "$rl_5h_pct_int")

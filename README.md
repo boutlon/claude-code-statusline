@@ -58,6 +58,34 @@ Or clone and symlink: `git clone https://github.com/levibe/claude-code-statuslin
 3. Restart Claude Code.
 
 
+## Configuration
+
+Hide indicators you don't want by setting `CLAUDE_STATUSLINE_HIDE` to a comma-separated list of names. Prefix the command in `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "CLAUDE_STATUSLINE_HIDE=tpm ~/.claude/statusline.sh"
+  }
+}
+```
+
+Or add it to the `env` block in the same file, which the statusline inherits.
+
+| Name | Hides |
+|---|---|
+| `branch` | Branch name and worktree marker |
+| `diff` | Uncommitted additions and deletions |
+| `model` | Model name and 1M marker |
+| `context` | Context usage bar and percentage |
+| `tpm` | Throughput (tokens per minute) |
+| `limits` | 5-hour and 7-day rate limits |
+| `cache` | Prompt cache countdown and cold state |
+
+Unknown names are ignored. A hidden indicator also skips the work behind it, so hiding `diff` avoids the git diff scan and hiding `tpm` avoids the sliding-window bookkeeping.
+
+
 ## Requirements
 
 - [`jq`](https://jqlang.github.io/jq/) – JSON parsing
