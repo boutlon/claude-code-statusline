@@ -98,7 +98,7 @@ Unknown names are ignored. A hidden indicator also skips the work behind it, so 
 
 - Tracks text diffs, untracked files, and binary file changes (binary files count as +1 added or -1 removed)
 - Caps line counting at 10k to avoid slowdowns on large diffs
-- TPM counts tokens added to the conversation plus model output over the last 5 minutes of the transcript, subagents included; re-reading or re-caching existing context is not new work and does not count
+- Throughput counts tokens added to the conversation plus model output over the last 5 minutes of the transcript, subagents included; re-reading or re-caching existing context is not new work and does not count
 - Shows short SHA on detached HEAD; falls back to symbolic ref in empty repos
 - Marks a linked git worktree with a distinct icon and color, separating it from the main checkout
 - Computes prompt cache warmth from `expires_at` against the clock rather than trusting the `warm` flag, which can lag when Claude Code re-runs the script at the moment of expiry (requires Claude Code 2.1.251 or later for `prompt_cache`)
