@@ -10,9 +10,9 @@ A minimal Claude Code statusline showing branch, diff, model, context, throughpu
 
 ## Design principles
 
-- **Essential** – relevant indicators shown without extra labels, dividers, or empty states
-- **Quiet** – supporting the main action, not competing with it
-- **Terminal-first** – plain text symbols, no emojis
+- **Essential**: relevant indicators shown without extra labels, dividers, or empty states
+- **Quiet**: supporting the main action, not competing with it
+- **Terminal-first**: plain text symbols, no emojis
 
 
 ## What it shows
@@ -24,7 +24,7 @@ A minimal Claude Code statusline showing branch, diff, model, context, throughpu
 | **Model** | Active Claude model |  |
 | **Context** | Usage bar and percentage, scaled so 100% matches the actual autocompact point | Grey <35%, yellow-green 35%, yellow 50%, orange 75%, red 90% |
 | **Throughput** | Tokens per minute | Grey <1k, yellow 1k, orange 5k, red 10k, violet 20k |
-| **Rate limits** | 5-hour and 7-day usage with a countdown to reset. Hidden while on a comfortable pace | Shown on first use, when on pace to hit the limit, and from 75%. Grey <50%, yellow 50%, orange 75%, red 90% |
+| **Rate limits** | 5-hour and 7-day usage with a countdown to reset. Hidden while on a comfortable pace | Shown on first use, when on pace to hit the limit, and at 75% and above. Grey <50%, yellow 50%, orange 75%, red 90% |
 | **Prompt cache** | Countdown to the cached prefix going cold, then `cache cold` until the next response warms it. Hidden while warm with time to spare | Shown in the last 10 minutes and once cold. Yellow 10m, orange 5m, red 2m, blue when cold |
 
 Indicators without data are hidden rather than shown empty.
@@ -56,7 +56,7 @@ Or clone and symlink: `git clone https://github.com/levibe/claude-code-statuslin
 }
 ```
 
-`refreshInterval` re-runs the script every 30 seconds while the session is idle so the prompt cache countdown keeps ticking. Without it the segment still updates on every event and still flips to cold at the right moment, it just stays fixed between events.
+`refreshInterval` re-runs the script every 30 seconds while the session is idle so the prompt cache countdown keeps ticking. Without it, the countdown still updates on every event and still flips to cold on time. It just stays fixed between events.
 
 3. Restart Claude Code.
 
@@ -91,8 +91,8 @@ Unknown names are ignored. A hidden indicator also skips the work behind it, so 
 
 ## Requirements
 
-- [`jq`](https://jqlang.github.io/jq/) – JSON parsing
-- `git` – branch and diff information
+- [`jq`](https://jqlang.github.io/jq/): JSON parsing
+- `git`: branch and diff information
 
 `brew install jq git` or `apt install jq git`
 
@@ -101,12 +101,12 @@ Unknown names are ignored. A hidden indicator also skips the work behind it, so 
 
 - Tracks text diffs, untracked files, and binary file changes (binary files count as +1 added or -1 removed)
 - Caps line counting at 10k to avoid slowdowns on large diffs
-- TPM uses a 5-minute sliding window and includes subagent token usage
+- Throughput uses a 5-minute sliding window and includes subagent token usage
 - Shows short SHA on detached HEAD; falls back to symbolic ref in empty repos
 - Marks a linked git worktree with a distinct icon and color, separating it from the main checkout
 - Computes prompt cache warmth from `expires_at` against the clock rather than trusting the `warm` flag, which can lag when Claude Code re-runs the script at the moment of expiry (requires Claude Code 2.1.251 or later for `prompt_cache`)
 - Uses `--no-optional-locks` on all git calls to prevent lock contention
-- Fixes model name bleeding across sessions ([CC bug](https://github.com/anthropics/claude-code/issues/19570))
+- Fixes model name bleeding across sessions ([Claude Code bug](https://github.com/anthropics/claude-code/issues/19570))
 - Validates model names to filter garbled input from Claude Code
 
 
