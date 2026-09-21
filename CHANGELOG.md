@@ -11,6 +11,22 @@
 - Treat cosmetic worktree-folder differences as a match: a folder that is just the branch with slashes flattened (`fix-tpm` for `fix/tpm`) and/or a 1-2 digit collision suffix (`fix-tpm-2`) no longer renders both names
 - Middle-truncate the dimmed branch name to 19 characters (9 kept per side, so a full ticket id like PRO-14555 survives) when it renders alongside a genuinely different worktree name, keeping the line bounded
 
+## 1.7.0
+
+### Added
+
+- Show a prompt cache countdown on line 2: yellow from 10 minutes, orange under 5m, red under 2m, and `cache cold` in blue once it expires. Hidden while more than 10 minutes remain, and requires Claude Code 2.1.251 or later
+- Add `CLAUDE_STATUSLINE_HIDE` to hide any indicators from a comma-separated list: `branch`, `diff`, `model`, `context`, `tpm`, `cache`, `limits`
+
+### Fixed
+
+- Compute TPM from the session transcript instead of the context-window snapshot. Fixes the inflated rate early in a session, the stuck non-zero rate on idle sessions, the stale rate after compaction, and the multi-million spike on resume
+- Count only tokens added to the conversation plus output, so re-reading or rewriting context after the cache goes cold no longer counts as throughput
+
+### Removed
+
+- The sliding-window and subagent state files in `/tmp`, and the resume sentinel; the transcript is now the only source
+
 ## 1.6.0
 
 ### Added

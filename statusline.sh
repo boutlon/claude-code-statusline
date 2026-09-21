@@ -1,13 +1,14 @@
 #!/bin/sh
 # Line 1: ⌥ branch  +N -N  ✦ model  ██▒░░ N%  ϟ N tpm
-# Line 2: 5h N% XhYm  7d N% XdYh   (shown when on pace / ≥75%)
+# Line 2: 5h N% XhYm  7d N% XdYh  cache Nm   (rate limits shown when on pace / ≥75%; cache when ≤10m left or cold)
 
-TPM_STATE_PREFIX="claude-code-statusline-tpm"
-TPM_WINDOW_MS=300000  # 5 minutes
+TPM_WINDOW_MS=300000     # 5 minutes
+TPM_WINDOW_MIN_MS=60000  # floor: never divide a single early response by a few seconds
+TPM_TAIL_BYTES=16777216  # bytes read from the end of each transcript file
 MODEL_STATE_PREFIX="claude-code-statusline-model"
-SUBAGENT_STATE_PREFIX="claude-code-statusline-subagent"
 USAGE_STATE_PREFIX="claude-code-statusline-usage"
 USAGE_FIRST_WINDOW_S=5   # seconds to show rate limits on first invocation
+CACHE_SHOW_S=600         # show the prompt cache countdown at or below this many seconds left
 
 # Helpers for rate limit display
 fmt_countdown() {
@@ -83,27 +84,30 @@ eval "$(echo "$input" | jq -r '
   "used=\(.context_window.used_percentage // 0 | floor | @sh)",
   "model=\(.model.display_name // "unknown" | sub(" *\\(.*\\)"; "") | @sh)",
   "ctx_size=\(.context_window.context_window_size // 0 | floor | @sh)",
-  "total_in=\(.context_window.total_input_tokens // 0 | floor | @sh)",
-  "total_out=\(.context_window.total_output_tokens // 0 | floor | @sh)",
   "duration_ms=\(.cost.total_duration_ms // 0 | floor | @sh)",
   "rl_5h_pct=\(.rate_limits.five_hour.used_percentage // "" | @sh)",
   "rl_5h_reset=\(.rate_limits.five_hour.resets_at // "" | @sh)",
   "rl_7d_pct=\(.rate_limits.seven_day.used_percentage // "" | @sh)",
-  "rl_7d_reset=\(.rate_limits.seven_day.resets_at // "" | @sh)"
+  "rl_7d_reset=\(.rate_limits.seven_day.resets_at // "" | @sh)",
+  "cache_warm=\(.prompt_cache.warm // "" | @sh)",
+  "cache_expires=\(.prompt_cache.expires_at | if type == "number" then floor else 0 end | @sh)"
 ')"
 
 # Defaults if jq fails or fields are missing
 cwd=${cwd:-}; session_id=${session_id:-}; transcript_path=${transcript_path:-}
 used=${used:-0}; model=${model:-unknown}; ctx_size=${ctx_size:-0}
-total_in=${total_in:-0}; total_out=${total_out:-0}; duration_ms=${duration_ms:-0}
+duration_ms=${duration_ms:-0}
 rl_5h_pct=${rl_5h_pct:-}; rl_5h_reset=${rl_5h_reset:-}
 rl_7d_pct=${rl_7d_pct:-}; rl_7d_reset=${rl_7d_reset:-}
+cache_warm=${cache_warm:-}; cache_expires=${cache_expires:-}
 
 # Validate numeric fields
 case "$rl_5h_reset" in ""|*[!0-9]*) rl_5h_reset="" ;; esac
 case "$rl_7d_reset" in ""|*[!0-9]*) rl_7d_reset="" ;; esac
 case "$rl_5h_pct" in ""|*[!0-9.]*|*.*.*) rl_5h_pct="" ;; esac
 case "$rl_7d_pct" in ""|*[!0-9.]*|*.*.*) rl_7d_pct="" ;; esac
+# expires_at is null (jq → 0) when the last response reported no cache tokens
+case "$cache_expires" in ""|0|*[!0-9]*) cache_expires="" ;; esac
 
 # Validate model name: must match "Name N" or "Name N.N" (e.g. "Fable 5", "Opus 4.6", "Haiku 4.5")
 # Garbled names from Claude Code (e.g. "Op.6") are treated as unknown so they don't pollute the cache
@@ -115,48 +119,100 @@ esac
 # Session-scoped state key (used by model cache and sliding window TPM)
 safe_id=$(printf '%s' "$session_id" | tr -dc 'a-zA-Z0-9_-')
 
+# Indicators to hide, from CLAUDE_STATUSLINE_HIDE: a comma-separated list of
+# names (branch, diff, model, context, tpm, limits, cache). Spaces are
+# tolerated and unknown names are ignored. A hidden indicator also skips the
+# work behind it.
+hide_list=",$(printf '%s' "${CLAUDE_STATUSLINE_HIDE:-}" | tr -d ' '),"
+hidden() {
+  case "$hide_list" in *,"$1",*) return 0 ;; esac
+  return 1
+}
+
 # Temp file cleanup (set once, covers all temp files created below)
-tmpfile=""
 untracked_list=""
-trap 'rm -f "$tmpfile" "$untracked_list"' EXIT
+trap 'rm -f "$untracked_list"' EXIT
 
-# Tokens per minute (full-session average as default)
-total_tokens=$((total_in + total_out))
-
-# Subagent tokens (mtime-cached to avoid re-parsing unchanged files)
-subagent_tokens=0
-if [ -n "$transcript_path" ] && [ -n "$safe_id" ]; then
-  subagent_dir="${transcript_path%.jsonl}/subagents"
-  if [ -d "$subagent_dir" ]; then
-    subagent_cache="/tmp/${SUBAGENT_STATE_PREFIX}-${safe_id}"
-    # Fingerprint: size:mtime:path per file, joined into one line
-    if stat -c '%s' /dev/null >/dev/null 2>&1; then
-      fingerprint=$(stat -c '%s:%Y:%n' "$subagent_dir"/agent-*.jsonl 2>/dev/null | tr '\n' '|')
-    else
-      fingerprint=$(stat -f '%z:%m:%N' "$subagent_dir"/agent-*.jsonl 2>/dev/null | tr '\n' '|')
-    fi
-    if [ -n "$fingerprint" ]; then
-      cached_fp=""
-      [ -f "$subagent_cache" ] && cached_fp=$(head -1 "$subagent_cache")
-      if [ "$fingerprint" = "$cached_fp" ]; then
-        subagent_tokens=$(tail -1 "$subagent_cache")
-      else
-        subagent_tokens=$(cat "$subagent_dir"/agent-*.jsonl 2>/dev/null \
-          | jq -r 'select(.type == "assistant") | "\(.message.id) \(.message.usage.input_tokens // 0) \(.message.usage.output_tokens // 0)"' 2>/dev/null \
-          | awk '{usage[$1]=$2" "$3} END {for(id in usage){split(usage[id],a);s+=a[1]+a[2]} print s+0}')
-        subagent_tokens=${subagent_tokens:-0}
-        printf '%s\n%s\n' "$fingerprint" "$subagent_tokens" > "$subagent_cache"
-      fi
-    fi
+# Tokens per minute: a sliding window over the session transcript.
+#
+# The bolt measures work, not cost. Every assistant line in the transcript
+# carries a timestamp and the API's usage block, and the sum of fresh input,
+# cache writes, and cache reads is the size of the context that call saw.
+# A message's work is how much that context grew over the previous message
+# in the same file (the new tool results and user text) plus its output.
+# The previous output is part of that growth, since it joins the context for
+# the next call, so it is subtracted rather than counted twice. Re-reading
+# existing context, or rewriting it to cache after the cache went cold,
+# moves tokens between usage columns without growing the context, so it
+# doesn't register; line 2 already shows the cache going cold. A shrink
+# (compaction) counts as zero, and the first message in a file has nothing
+# to diff against, so only its output counts. Claude Code also writes
+# synthetic assistant entries after API errors, with an id and timestamp but
+# no usage; anything with no input context is dropped so it can't become a
+# zero baseline that makes the next real response look like all new work.
+# Streaming repeats a message id
+# once per content block with a growing output count, so each id is taken
+# at its largest output. Subagent transcripts are summed the same way.
+#
+# The window is capped at the session's own lifetime (total_duration_ms,
+# which restarts from zero on resume even though cost carries over), so a
+# resumed session doesn't inherit pre-resume messages and a fresh one gets
+# a real rate from its first response, with a one-minute floor so that
+# first response isn't divided by a handful of seconds. The floor widens the
+# divisor only, never the lookback, so a session resumed seconds ago still
+# sees nothing from the previous process. Only files modified inside the
+# window are parsed, and only their tails; assistant lines are a few percent
+# of a transcript's bytes, so grep narrows the input before jq parses it. A
+# busy five minutes can write several MB, hence the 16MB tail.
+#
+# The cutoff is a UTC ISO-8601 string compared lexically against the
+# transcript's timestamps (always UTC with a Z suffix). jq 1.6, still what
+# apt ships, parses ISO dates in local time, so no date parsing happens in jq.
+tpm=0
+if ! hidden tpm && [ -n "$transcript_path" ] && [ "$duration_ms" -gt 0 ] 2>/dev/null; then
+  lookback_ms=$TPM_WINDOW_MS
+  [ "$duration_ms" -lt "$lookback_ms" ] && lookback_ms=$duration_ms
+  window_ms=$lookback_ms
+  [ "$window_ms" -lt "$TPM_WINDOW_MIN_MS" ] && window_ms=$TPM_WINDOW_MIN_MS
+  # BSD find documents rounding file age up to whole minutes, so look one
+  # minute past the window; the timestamp cutoff below enforces the edge.
+  window_files=$(find "$transcript_path" "${transcript_path%.jsonl}/subagents" \
+    -maxdepth 1 -name '*.jsonl' -mmin "-$((TPM_WINDOW_MS / 60000 + 1))" 2>/dev/null)
+  cutoff_s=$(( $(date +%s) - lookback_ms / 1000 ))
+  # BSD date takes -r <epoch>, GNU date takes -d @<epoch>. The .000Z suffix
+  # keeps a fractional timestamp in the cutoff second from sorting below it.
+  cutoff=$(date -u -r "$cutoff_s" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null \
+    || date -u -d "@$cutoff_s" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null)
+  # An empty cutoff would admit the whole tail, so require one
+  if [ -n "$window_files" ] && [ -n "$cutoff" ]; then
+    window_tokens=$(printf '%s\n' "$window_files" | while IFS= read -r f; do
+        # dd with a 1MB block skip, not tail -c: BSD tail walks the whole
+        # file for a byte count, which costs ~0.3s on a 13MB transcript.
+        size=$(wc -c < "$f")
+        if [ "$size" -gt "$TPM_TAIL_BYTES" ] 2>/dev/null; then
+          dd if="$f" bs=1048576 skip=$(( (size - TPM_TAIL_BYTES) / 1048576 )) 2>/dev/null
+        else
+          cat "$f"
+        fi | grep -a -F '"type":"assistant"' | jq -nR --arg cutoff "$cutoff" '
+          [ inputs | fromjson? | select(.type == "assistant") | .message as $m
+            | select($m.id != null and (.timestamp | type) == "string"
+                     and (.timestamp | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$")))
+            | { id: $m.id, ts: .timestamp,
+                ctx: (($m.usage.input_tokens // 0) + ($m.usage.cache_creation_input_tokens // 0)
+                      + ($m.usage.cache_read_input_tokens // 0)),
+                out: ($m.usage.output_tokens // 0) }
+            | select(.ctx > 0) ]
+          | group_by(.id) | map(max_by(.out)) | sort_by(.ts)
+          | [ range(length) as $i | .[$i] + { prev: (if $i > 0 then .[$i - 1] else null end) } ]
+          | map(select(.ts >= $cutoff)
+                | .out + (if .prev == null then 0
+                          else ([.ctx - .prev.ctx - .prev.out, 0] | max) end))
+          | add // 0
+        ' 2>/dev/null
+      done | awk '{ s += $1 } END { print s + 0 }')
+    case "$window_tokens" in ""|*[!0-9]*) window_tokens=0 ;; esac
+    tpm=$(( window_tokens * 60000 / window_ms ))
   fi
-fi
-subagent_tokens=${subagent_tokens:-0}
-[ "$subagent_tokens" -gt 0 ] 2>/dev/null && total_tokens=$((total_tokens + subagent_tokens))
-
-if [ "$duration_ms" -gt 0 ]; then
-  tpm=$(( (total_tokens * 60000) / duration_ms ))
-else
-  tpm=0
 fi
 
 # Per-session model cache — prevents global model changes in other sessions
@@ -230,74 +286,6 @@ if [ "$effective_size" -gt 0 ] 2>/dev/null; then
   fi
 fi
 
-# Sliding window TPM (overrides full-session average when enough data)
-if [ -n "$safe_id" ]; then
-  state_file="/tmp/${TPM_STATE_PREFIX}-${safe_id}"
-  restart_sentinel="${state_file}.restart"
-  # If the state file is missing (eviction or first run), clear any orphaned
-  # sentinel so we don't hide TPM forever when the two files get out of sync.
-  if [ ! -f "$state_file" ]; then
-    : > "$state_file"
-    rm -f "$restart_sentinel"
-  fi
-
-  # Detect session restart (duration_ms went backwards). When we can prove the
-  # resumed session has at least as many tokens as before, seed the state file
-  # with a synthetic baseline at ms=0 so the first post-restart sample produces
-  # a real window_tpm (delta = post-restart tokens / post-restart duration).
-  # When prev_tok > total_tokens (context trim, etc.) the baseline would yield
-  # a negative delta and keep the sentinel set for up to TPM_WINDOW_MS, so we
-  # truncate instead and let the natural sliding window recover after two real
-  # samples. The sentinel forces tpm=0 until window_tpm is non-empty/positive.
-  last_ms=$(tail -n 1 "$state_file" 2>/dev/null | awk '$1 ~ /^[0-9]+$/ { print $1 }')
-  if [ -n "$last_ms" ] && [ "$duration_ms" -lt "$last_ms" ] 2>/dev/null; then
-    prev_tok=$(tail -n 1 "$state_file" 2>/dev/null \
-               | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ { print $2 }')
-    if [ -n "$prev_tok" ] && [ "$prev_tok" -gt 0 ] 2>/dev/null \
-       && [ "$total_tokens" -gt "$prev_tok" ] 2>/dev/null; then
-      printf '0 %s\n' "$prev_tok" > "$state_file"
-    else
-      : > "$state_file"
-    fi
-    : > "$restart_sentinel"
-  fi
-
-  cutoff=$((duration_ms - TPM_WINDOW_MS))
-  [ "$cutoff" -lt 0 ] && cutoff=0
-
-  tmpfile=$(mktemp "/tmp/${TPM_STATE_PREFIX}-XXXXXX")
-
-  window_tpm=$(awk -v cutoff="$cutoff" -v cur_ms="$duration_ms" -v cur_tok="$total_tokens" -v tmpfile="$tmpfile" '
-    BEGIN { oldest_ms = ""; oldest_tok = ""; last_ms = "" }
-    $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $1 + 0 >= cutoff {
-      print > tmpfile
-      if (oldest_ms == "") { oldest_ms = $1 + 0; oldest_tok = $2 + 0 }
-      last_ms = $1 + 0
-    }
-    END {
-      if (last_ms != cur_ms + 0)
-        printf "%s %s\n", cur_ms, cur_tok > tmpfile
-      close(tmpfile)
-      delta_ms = cur_ms - oldest_ms
-      delta_tok = cur_tok - oldest_tok
-      if (oldest_ms != "" && delta_ms > 0)
-        printf "%d", (delta_tok * 60000) / delta_ms
-    }
-  ' "$state_file" 2>/dev/null)
-
-  [ -f "$tmpfile" ] && mv "$tmpfile" "$state_file"
-
-  # When the awk produced a usable rate, take it and clear any restart sentinel.
-  # Otherwise (empty / negative window_tpm), the sentinel keeps the segment
-  # hidden until a real post-restart sample pair produces a positive rate.
-  if [ -n "$window_tpm" ] && [ "$window_tpm" -gt 0 ] 2>/dev/null; then
-    tpm=$window_tpm
-    rm -f "$restart_sentinel"
-  elif [ -f "$restart_sentinel" ]; then
-    tpm=0
-  fi
-fi
-
 # 5-char progress bar with 4 shades (░▒▓█), 20 visual steps
 bar=""
 for i in 0 1 2 3 4; do
@@ -331,14 +319,15 @@ dim="\033[38;5;247m"
 reset="\033[0m"
 sep="  "
 
-# Git branch + uncommitted diff stats (tracked + untracked)
+# Git branch + uncommitted diff stats (tracked + untracked).
+# Skipped entirely when both are hidden; the diff scan alone when only diff is.
 branch=""
 diff_stat=""
 worktree_name=""          # worktree folder name, only when it differs from the branch
 branch_display=""         # branch as rendered beside the worktree name (may be truncated)
 branch_glyph="⌥"          # main checkout
 branch_color="\033[36m"   # cyan
-if [ -n "$cwd" ]; then
+if [ -n "$cwd" ] && { ! hidden branch || ! hidden diff; }; then
   branch=$(git --no-optional-locks -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)
   # Detached HEAD: show short SHA instead of literal "HEAD"
   [ "$branch" = "HEAD" ] && branch=$(git --no-optional-locks -C "$cwd" rev-parse --short HEAD 2>/dev/null)
@@ -353,89 +342,93 @@ if [ -n "$cwd" ]; then
     # (absolute) form; without it, from a subdir of the main checkout git prints
     # git-dir absolute but common-dir relative, so the string compare below would
     # false-positive a plain main checkout as a worktree.
-    gitpaths=$(git --no-optional-locks -C "$cwd" rev-parse --path-format=absolute --git-dir --git-common-dir --show-toplevel 2>/dev/null)
-    gd=$(printf '%s\n' "$gitpaths" | sed -n '1p')
-    gcd=$(printf '%s\n' "$gitpaths" | sed -n '2p')
-    if [ -n "$gd" ] && [ "$gd" != "$gcd" ]; then
-      branch_glyph="⧉"                # worktree = a parallel copy of the repo
-      branch_color="\033[38;5;182m"   # light mauve, distinct from the cyan main checkout
-      # Worktree name = folder name of the worktree root (third rev-parse
-      # output, --show-toplevel). Not the git-dir basename: that goes stale
-      # after `git worktree move` and gains numeric suffixes on basename
-      # collisions. Suppressed when it matches the branch (the common case)
-      # so we don't render "feature feature".
-      worktree_name=$(printf '%s\n' "$gitpaths" | sed -n '3p')
-      worktree_name=${worktree_name##*/}
-      # Cosmetic differences also collapse to one name: folders are commonly
-      # the branch with slashes flattened to dashes (fix/tpm -> fix-tpm),
-      # optionally plus a numeric collision suffix (fix-tpm-2). Suffix is
-      # capped at two digits so a meaningful name like release-2024 still
-      # counts as a real divergence.
-      norm_branch=$(printf '%s' "$branch" | tr '/' '-')
-      norm_wt=$(printf '%s' "$worktree_name" | sed -E 's/-[0-9]{1,2}$//')
-      if [ "$worktree_name" = "$norm_branch" ] || [ "$norm_wt" = "$norm_branch" ]; then
-        worktree_name=""
-      fi
-      # Genuinely different names render as a pair; middle-truncate the
-      # trailing branch so the pair can't blow out the line. 9 chars kept per
-      # side so a full ticket id (PRO-14555) survives the cut. In UTF-8
-      # locales sed counts characters, not bytes, so multibyte names truncate
-      # cleanly; names of 19 chars or fewer don't match and pass through.
-      if [ -n "$worktree_name" ]; then
-        branch_display=$(printf '%s' "$branch" | sed -E 's/^(.{9}).{2,}(.{9})$/\1…\2/')
+    if ! hidden branch; then
+      gitpaths=$(git --no-optional-locks -C "$cwd" rev-parse --path-format=absolute --git-dir --git-common-dir --show-toplevel 2>/dev/null)
+      gd=$(printf '%s\n' "$gitpaths" | sed -n '1p')
+      gcd=$(printf '%s\n' "$gitpaths" | sed -n '2p')
+      if [ -n "$gd" ] && [ "$gd" != "$gcd" ]; then
+        branch_glyph="⧉"                # worktree = a parallel copy of the repo
+        branch_color="\033[38;5;182m"   # light mauve, distinct from the cyan main checkout
+        # Worktree name = folder name of the worktree root (third rev-parse
+        # output, --show-toplevel). Not the git-dir basename: that goes stale
+        # after `git worktree move` and gains numeric suffixes on basename
+        # collisions. Suppressed when it matches the branch (the common case)
+        # so we don't render "feature feature".
+        worktree_name=$(printf '%s\n' "$gitpaths" | sed -n '3p')
+        worktree_name=${worktree_name##*/}
+        # Cosmetic differences also collapse to one name: folders are commonly
+        # the branch with slashes flattened to dashes (fix/tpm -> fix-tpm),
+        # optionally plus a numeric collision suffix (fix-tpm-2). Suffix is
+        # capped at two digits so a meaningful name like release-2024 still
+        # counts as a real divergence.
+        norm_branch=$(printf '%s' "$branch" | tr '/' '-')
+        norm_wt=$(printf '%s' "$worktree_name" | sed -E 's/-[0-9]{1,2}$//')
+        if [ "$worktree_name" = "$norm_branch" ] || [ "$norm_wt" = "$norm_branch" ]; then
+          worktree_name=""
+        fi
+        # Genuinely different names render as a pair; middle-truncate the
+        # trailing branch so the pair can't blow out the line. 9 chars kept per
+        # side so a full ticket id (PRO-14555) survives the cut. In UTF-8
+        # locales sed counts characters, not bytes, so multibyte names truncate
+        # cleanly; names of 19 chars or fewer don't match and pass through.
+        if [ -n "$worktree_name" ]; then
+          branch_display=$(printf '%s' "$branch" | sed -E 's/^(.{9}).{2,}(.{9})$/\1…\2/')
+        fi
       fi
     fi
-    added=0
-    removed=0
-    # Tracked changes require at least one commit
-    if git --no-optional-locks -C "$cwd" rev-parse HEAD 2>/dev/null >/dev/null; then
-      # Tracked changes (text)
-      stat=$(git --no-optional-locks -C "$cwd" diff --shortstat HEAD 2>/dev/null)
-      added=$(echo "$stat" | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+')
-      removed=$(echo "$stat" | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+')
-      added=${added:-0}
-      removed=${removed:-0}
-      # Tracked binary changes: +1 per added/modified, -1 per deleted
-      bin_added=$(git --no-optional-locks -C "$cwd" diff --diff-filter=AM --numstat HEAD 2>/dev/null | grep -c '^-' || true)
-      bin_deleted=$(git --no-optional-locks -C "$cwd" diff --diff-filter=D --numstat HEAD 2>/dev/null | grep -c '^-' || true)
-      added=$((added + bin_added))
-      removed=$((removed + bin_deleted))
-    fi
-    # Untracked files: text lines + binary files counted as +1 each (cap at 10k)
-    untracked_lines=0
-    untracked_capped=0
-    untracked_list=$(mktemp)
-    git --no-optional-locks -C "$cwd" ls-files --others --exclude-standard -z 2>/dev/null > "$untracked_list"
-    total_untracked=$(tr -cd '\0' < "$untracked_list" | wc -c | tr -d ' ')
-    total_untracked=${total_untracked:-0}
-    if [ "$total_untracked" -gt 0 ] 2>/dev/null; then
-      # Text file lines
-      raw_count=$(xargs -0 grep -Ih '' < "$untracked_list" 2>/dev/null | head -n 10001 | wc -l | tr -d ' ')
-      raw_count=${raw_count:-0}
-      if [ "$raw_count" -gt 10000 ] 2>/dev/null; then
-        untracked_capped=1
-        untracked_lines=10000
-      else
-        untracked_lines=$raw_count
+    if ! hidden diff; then
+      added=0
+      removed=0
+      # Tracked changes require at least one commit
+      if git --no-optional-locks -C "$cwd" rev-parse HEAD 2>/dev/null >/dev/null; then
+        # Tracked changes (text)
+        stat=$(git --no-optional-locks -C "$cwd" diff --shortstat HEAD 2>/dev/null)
+        added=$(echo "$stat" | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+')
+        removed=$(echo "$stat" | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+')
+        added=${added:-0}
+        removed=${removed:-0}
+        # Tracked binary changes: +1 per added/modified, -1 per deleted
+        bin_added=$(git --no-optional-locks -C "$cwd" diff --diff-filter=AM --numstat HEAD 2>/dev/null | grep -c '^-' || true)
+        bin_deleted=$(git --no-optional-locks -C "$cwd" diff --diff-filter=D --numstat HEAD 2>/dev/null | grep -c '^-' || true)
+        added=$((added + bin_added))
+        removed=$((removed + bin_deleted))
       fi
-      # Binary files: count each as +1 (total minus text files)
-      text_files=$(xargs -0 grep -Il '' < "$untracked_list" 2>/dev/null | wc -l | tr -d ' ')
-      text_files=${text_files:-0}
-      binary_count=$((total_untracked - text_files))
-      [ "$binary_count" -gt 0 ] 2>/dev/null && untracked_lines=$((untracked_lines + binary_count))
-    fi
-    rm -f "$untracked_list"
-    [ "$untracked_lines" -gt 0 ] 2>/dev/null && added=$((added + untracked_lines))
-    if [ "$added" -gt 0 ] || [ "$removed" -gt 0 ]; then
-      diff_stat="${sep}"
-      if [ "$untracked_capped" -eq 1 ]; then
-        diff_stat="${diff_stat}\033[93m⚠ +${added}${reset}"
-      elif [ "$added" -gt 0 ]; then
-        diff_stat="${diff_stat}\033[92m+${added}${reset}"
+      # Untracked files: text lines + binary files counted as +1 each (cap at 10k)
+      untracked_lines=0
+      untracked_capped=0
+      untracked_list=$(mktemp)
+      git --no-optional-locks -C "$cwd" ls-files --others --exclude-standard -z 2>/dev/null > "$untracked_list"
+      total_untracked=$(tr -cd '\0' < "$untracked_list" | wc -c | tr -d ' ')
+      total_untracked=${total_untracked:-0}
+      if [ "$total_untracked" -gt 0 ] 2>/dev/null; then
+        # Text file lines
+        raw_count=$(xargs -0 grep -Ih '' < "$untracked_list" 2>/dev/null | head -n 10001 | wc -l | tr -d ' ')
+        raw_count=${raw_count:-0}
+        if [ "$raw_count" -gt 10000 ] 2>/dev/null; then
+          untracked_capped=1
+          untracked_lines=10000
+        else
+          untracked_lines=$raw_count
+        fi
+        # Binary files: count each as +1 (total minus text files)
+        text_files=$(xargs -0 grep -Il '' < "$untracked_list" 2>/dev/null | wc -l | tr -d ' ')
+        text_files=${text_files:-0}
+        binary_count=$((total_untracked - text_files))
+        [ "$binary_count" -gt 0 ] 2>/dev/null && untracked_lines=$((untracked_lines + binary_count))
       fi
-      if [ "$removed" -gt 0 ]; then
-        [ "$added" -gt 0 ] && diff_stat="${diff_stat} "
-        diff_stat="${diff_stat}\033[91m-${removed}${reset}"
+      rm -f "$untracked_list"
+      [ "$untracked_lines" -gt 0 ] 2>/dev/null && added=$((added + untracked_lines))
+      if [ "$added" -gt 0 ] || [ "$removed" -gt 0 ]; then
+        diff_stat=""
+        if [ "$untracked_capped" -eq 1 ]; then
+          diff_stat="${diff_stat}\033[93m⚠ +${added}${reset}"
+        elif [ "$added" -gt 0 ]; then
+          diff_stat="${diff_stat}\033[92m+${added}${reset}"
+        fi
+        if [ "$removed" -gt 0 ]; then
+          [ "$added" -gt 0 ] && diff_stat="${diff_stat} "
+          diff_stat="${diff_stat}\033[91m-${removed}${reset}"
+        fi
       fi
     fi
   fi
@@ -449,7 +442,7 @@ rl_7d_pct_int=0
 remaining_5h=0
 remaining_7d=0
 
-if [ -n "$rl_5h_pct" ] || [ -n "$rl_7d_pct" ]; then
+if ! hidden limits && { [ -n "$rl_5h_pct" ] || [ -n "$rl_7d_pct" ]; }; then
   _now=$(date +%s)
 
   # First invocation of this session (show for USAGE_FIRST_WINDOW_S seconds)?
@@ -500,20 +493,61 @@ if [ -n "$rl_5h_pct" ] || [ -n "$rl_7d_pct" ]; then
   fi
 fi
 
+# Prompt cache state. Warmth is computed from expires_at against the clock
+# rather than trusting `warm`: Claude Code re-runs the script the moment a warm
+# cache reaches expires_at, but the payload it hands over may still say warm.
+# Hidden while comfortably warm (> CACHE_SHOW_S left) or when there is no data.
+cache_seg=""
+if ! hidden cache && [ -n "$cache_expires" ]; then
+  _now=${_now:-$(date +%s)}
+  cache_left=$((cache_expires - _now))
+  if [ "$cache_warm" != "true" ] || [ "$cache_left" -le 0 ]; then
+    cache_seg="\033[38;5;63mcache cold"          # blue
+  elif [ "$cache_left" -le "$CACHE_SHOW_S" ]; then
+    if [ "$cache_left" -lt 120 ]; then
+      cache_color="\033[91m"                       # red: under 2m
+    elif [ "$cache_left" -lt 300 ]; then
+      cache_color="\033[38;5;208m"                 # orange: under 5m
+    else
+      cache_color="\033[93m"                       # yellow: 5m to 10m
+    fi
+    if [ "$cache_left" -lt 60 ]; then
+      cache_countdown="<1m"    # a refresh tick can't support second precision
+    else
+      cache_countdown=$(fmt_countdown "$cache_left")
+    fi
+    cache_seg="${cache_color}cache ${cache_countdown}"
+  fi
+fi
+
 # ─── Line 1: branch, diff, model, context, tpm ───
 
-if [ -n "$branch" ]; then
+# emit FORMAT [ARG...]: print one segment, separated from the previous one
+line1_empty=1
+emit() {
+  if [ "$line1_empty" -eq 1 ]; then line1_empty=0; else printf '%s' "$sep"; fi
+  printf "$@"
+}
+
+if ! hidden branch && [ -n "$branch" ]; then
   # Worktree name (always mauve here) leads when present; branch trails dimmed
-  printf "${branch_color}${branch_glyph} %s${reset}" "${worktree_name:-$branch}"
-  [ -n "$worktree_name" ] && printf " ${dim}%s${reset}" "${branch_display:-$branch}"
-  printf "%b" "$diff_stat"
-  printf "%s" "$sep"
+  emit "${branch_color}${branch_glyph} %s${reset}" "${worktree_name:-$branch}"
+  if [ -n "$worktree_name" ]; then
+    printf " ${dim}%s${reset}" "${branch_display:-$branch}"
+  fi
 fi
-printf "\033[38;5;252m✦ %s${reset}" "$model"
-if [ "$ctx_size" -ge 1000000 ] 2>/dev/null; then
-  printf " \033[38;5;252m1M${reset}"
+if [ -n "$diff_stat" ]; then
+  emit '%b' "$diff_stat"
 fi
-printf "${sep}${ctx_color}%s %s%%${reset}" "$bar" "$used"
+if ! hidden model; then
+  emit "\033[38;5;252m✦ %s${reset}" "$model"
+  if [ "$ctx_size" -ge 1000000 ] 2>/dev/null; then
+    printf " \033[38;5;252m1M${reset}"
+  fi
+fi
+if ! hidden context; then
+  emit "${ctx_color}%s %s%%${reset}" "$bar" "$used"
+fi
 if [ "$tpm" -gt 0 ]; then
   if [ "$tpm" -ge 100000000 ]; then
     tpm_display="$((tpm / 1000000))M"
@@ -539,13 +573,13 @@ if [ "$tpm" -gt 0 ]; then
   else
     bolt="ϟ"
   fi
-  printf "${sep}${dim}${bolt} %s tpm${reset}" "$tpm_display"
+  emit "${dim}${bolt} %s tpm${reset}" "$tpm_display"
 fi
 
-# ─── Line 2: rate limit usage ───
+# ─── Line 2: rate limit usage, prompt cache ───
 
-if [ "$show_5h" -eq 1 ] || [ "$show_7d" -eq 1 ]; then
-  printf '\n'
+if [ "$show_5h" -eq 1 ] || [ "$show_7d" -eq 1 ] || [ -n "$cache_seg" ]; then
+  [ "$line1_empty" -eq 0 ] && printf '\n'
 
   if [ "$show_5h" -eq 1 ]; then
     rl_5h_color=$(usage_color "$rl_5h_pct_int")
@@ -560,6 +594,11 @@ if [ "$show_5h" -eq 1 ] || [ "$show_7d" -eq 1 ]; then
     rl_7d_vcolor=$(usage_value_color "$rl_7d_pct_int")
     countdown_7d=$(fmt_countdown "$remaining_7d")
     printf "${rl_7d_color}7d ${rl_7d_vcolor}%s%%${reset} \033[2;38;5;249m%s${reset}" "$rl_7d_pct_int" "$countdown_7d"
+  fi
+
+  if [ -n "$cache_seg" ]; then
+    { [ "$show_5h" -eq 1 ] || [ "$show_7d" -eq 1 ]; } && printf "$sep"
+    printf "%b${reset}" "$cache_seg"
   fi
 fi
 
