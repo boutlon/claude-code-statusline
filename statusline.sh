@@ -368,14 +368,23 @@ if [ -n "$cwd" ] && { ! hidden branch || ! hidden diff; }; then
         # so we don't render "feature feature".
         worktree_name=$(printf '%s\n' "$gitpaths" | sed -n '3p')
         worktree_name=${worktree_name##*/}
-        # A folder that is just the branch with slashes flattened to dashes
-        # (fix/tpm -> fix-tpm) also collapses: it carries no information the
-        # branch doesn't. A collision suffix (fix-tpm-2) deliberately does not:
-        # it's the one thing that tells two worktrees on the same branch apart.
+        # Three folder spellings carry no information the branch doesn't, so
+        # they collapse too:
+        #   - the branch with slashes flattened to dashes (fix/tpm -> fix-tpm)
+        #   - Claude Code's own layout, .claude/worktrees/<name> on branch
+        #     worktree-<name> (it already turns slashes into "+" on both sides)
+        #   - a sibling folder prefixed with the repo name (myrepo-fix-tpm),
+        #     the repo being the main checkout that owns --git-common-dir
+        # A collision suffix (fix-tpm-2) deliberately does not: it's the one
+        # thing that tells two worktrees on the same branch apart.
         norm_branch=$(printf '%s' "$branch" | tr '/' '-')
-        if [ "$worktree_name" = "$norm_branch" ]; then
-          worktree_name=""
-        fi
+        repo_name=${gcd%/.git}
+        repo_name=${repo_name##*/}
+        repo_name=${repo_name%.git}
+        case "$worktree_name" in
+          "$norm_branch" | "${branch#worktree-}" | "${repo_name}-${norm_branch}")
+            worktree_name="" ;;
+        esac
         # Different names render as a pair; middle-truncate both so the pair
         # can't blow out the line. The tail is kept, so a collision suffix
         # survives the cut.

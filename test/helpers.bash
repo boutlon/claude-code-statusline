@@ -14,6 +14,8 @@ teardown() {
   cleanup_state "${TEST_SID}-a"
   cleanup_state "${TEST_SID}-b"
   [ -n "${TEST_GIT_REPO:-}" ] && rm -rf "$TEST_GIT_REPO" || true
+  # Worktrees made outside the repo (siblings) aren't removed with it
+  [ -n "${TEST_WORKTREE:-}" ] && rm -rf "$TEST_WORKTREE" || true
 }
 
 cleanup_state() {
@@ -35,7 +37,13 @@ make_git_repo() {
 # `git worktree add` (e.g. -b branch, --detach)
 make_worktree() {
   local folder="$1"; shift
-  TEST_WORKTREE="$TEST_GIT_REPO/.worktrees/$folder"
+  make_worktree_at "$TEST_GIT_REPO/.worktrees/$folder" "$@"
+}
+
+# Same, at an arbitrary absolute path ($1), for layouts other than .worktrees/
+# (Claude Code's .claude/worktrees/, repo-prefixed siblings)
+make_worktree_at() {
+  TEST_WORKTREE="$1"; shift
   git -C "$TEST_GIT_REPO" worktree add "$@" "$TEST_WORKTREE" >/dev/null 2>&1
 }
 

@@ -112,6 +112,48 @@ load 'helpers'
   [[ "$(plain)" != *"feature-foo"* ]]
 }
 
+@test "git: Claude Code worktree (.claude/worktrees/<name> on worktree-<name>) is not a divergence" {
+  make_git_repo
+  make_worktree_at "$TEST_GIT_REPO/.claude/worktrees/foo" -b worktree-foo
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ worktree-foo"* ]]
+  [[ "$(plain)" != *"foo worktree-foo"* ]]
+}
+
+@test "git: Claude Code worktree with a plus-joined name is not a divergence" {
+  make_git_repo
+  # Claude Code writes feature/auth as feature+auth in both the folder and the branch
+  make_worktree_at "$TEST_GIT_REPO/.claude/worktrees/feature+auth" -b worktree-feature+auth
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ worktree-feature+auth"* ]]
+  [[ "$(plain)" != *"feature+auth worktree-feature+auth"* ]]
+}
+
+@test "git: sibling folder prefixed with the repo name is not a divergence" {
+  make_git_repo
+  make_worktree_at "${TEST_GIT_REPO}-feature" -b feature
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ feature"* ]]
+  [[ "$(plain)" != *"-feature feature"* ]]
+}
+
+@test "git: repo-prefixed sibling with flattened slashes is not a divergence" {
+  make_git_repo
+  make_worktree_at "${TEST_GIT_REPO}-fix-tpm" -b fix/tpm
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  [[ "$(plain)" == *"⧉ fix/tpm"* ]]
+  [[ "$(plain)" != *"-fix-tpm fix/tpm"* ]]
+}
+
+@test "git: repo-prefixed sibling on a different branch still shows both names" {
+  make_git_repo
+  make_worktree_at "${TEST_GIT_REPO}-feature" -b hotfix
+  run run_sl "Opus 4.6" 25 "$TEST_SID" 60000 5000 3000 "$TEST_WORKTREE"
+  # The folder is long enough to be middle-truncated, so match its kept tail
+  [[ "$(plain)" == *"-feature hotfix"* ]]
+  [[ "$(plain)" != *"⧉ hotfix"* ]]
+}
+
 @test "git: collision suffix on the folder is shown, so same-branch worktrees stay distinct" {
   make_git_repo
   make_worktree feature-2 -b feature
